@@ -26,7 +26,9 @@ const PLATFORMS = {
 
 const STORAGE_KEYS = {
   WORDS: 'yq_sensitive_words',
+  WORDS_INIT: 'yq_sensitive_words_initialized',
   ALERTS: 'yq_alerts',
+  ALERTS_INIT: 'yq_alerts_initialized',
   LOGS: 'yq_operation_logs',
   HANDOVER_NOTES: 'yq_handover_notes',
   READ_IDS: 'yq_read_alert_ids',
@@ -377,18 +379,20 @@ let alerts = loadAlerts();
 let operationLogs = loadLogs();
 
 function loadWords() {
-  const stored = Store.get(STORAGE_KEYS.WORDS, null);
-  if (stored && Array.isArray(stored) && stored.length > 0) {
-    return stored;
+  const initialized = Store.get(STORAGE_KEYS.WORDS_INIT, false);
+  if (initialized) {
+    const stored = Store.get(STORAGE_KEYS.WORDS, []);
+    return Array.isArray(stored) ? stored : [];
   }
   const defaults = getDefaultWords();
   Store.set(STORAGE_KEYS.WORDS, defaults);
+  Store.set(STORAGE_KEYS.WORDS_INIT, true);
   return defaults;
 }
 
 function loadAlerts() {
-  const stored = Store.get(STORAGE_KEYS.ALERTS, null);
-  if (stored && Array.isArray(stored) && stored.length > 0) {
+  const initialized = Store.get(STORAGE_KEYS.ALERTS_INIT, false);
+  if (initialized) {
     // 如果跨天了，则重置为默认数据
     if (checkDailyReset()) {
       const defaults = getDefaultAlerts();
@@ -397,10 +401,12 @@ function loadAlerts() {
       Store.set(STORAGE_KEYS.LOGS, getDefaultLogs());
       return defaults;
     }
-    return stored;
+    const stored = Store.get(STORAGE_KEYS.ALERTS, []);
+    return Array.isArray(stored) ? stored : [];
   }
   const defaults = getDefaultAlerts();
   Store.set(STORAGE_KEYS.ALERTS, defaults);
+  Store.set(STORAGE_KEYS.ALERTS_INIT, true);
   return defaults;
 }
 
@@ -520,6 +526,17 @@ const WordAPI = {
     saveWords();
     return removed[0];
   },
+  clear() {
+    sensitiveWords = [];
+    saveWords();
+    return true;
+  },
+  restoreDefaults() {
+    const defaults = getDefaultWords();
+    sensitiveWords = defaults;
+    saveWords();
+    return defaults;
+  },
   getStats() {
     const total = sensitiveWords.length;
     const enabled = sensitiveWords.filter(w => w.enabled).length;
@@ -608,11 +625,17 @@ const AlertAPI = {
     });
     return alert;
   },
-  report(id, department) {
+  report(id, department, note = '') {
     const alert = this.getById(id);
     if (!alert) return null;
     const oldStatus = alert.status;
     alert.status = 'reporting';
+    alert.reportInfo = {
+      department,
+      note,
+      reportedBy: getCurrentShift().operator,
+      reportedAt: formatNowDateTime()
+    };
     saveAlerts();
     LogAPI.add({
       alertId: id,
@@ -620,7 +643,8 @@ const AlertAPI = {
       fromStatus: oldStatus,
       toStatus: 'reporting',
       operator: getCurrentShift().operator,
-      remark: `上报至 ${department}`
+      remark: `上报至 ${department}${note ? '：' + note : ''}`,
+      extra: { department, note }
     });
     return alert;
   },
@@ -711,6 +735,7 @@ const LogAPI = {
       toStatus: logData.toStatus || null,
       operator: logData.operator || getCurrentShift().operator,
       remark: logData.remark || '',
+      extra: logData.extra || null,
       createdAt: new Date().toISOString()
     };
     operationLogs.unshift(log);

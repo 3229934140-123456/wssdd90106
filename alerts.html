@@ -328,7 +328,7 @@
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <button class="btn btn-success" onclick="updateStatus(${a.id}, 'false_alarm')">🚫 标记误报</button>
             <button class="btn btn-warning" onclick="updateStatus(${a.id}, 'verifying')">🔍 待核实</button>
-            <button class="btn btn-danger" onclick="updateStatus(${a.id}, 'reporting')">📤 需上报</button>
+            <button class="btn btn-danger" onclick="showReportDialog(${a.id})">📤 需上报</button>
             <button class="btn btn-primary" onclick="updateStatus(${a.id}, 'done')">✅ 已办结</button>
           </div>
           <div style="margin-top:12px;">
@@ -337,6 +337,22 @@
             <button class="btn btn-sm" style="margin-top:8px;" onclick="saveRemark(${a.id})">💾 保存备注</button>
           </div>
         </div>
+
+        ${a.reportInfo ? `
+        <div class="detail-section">
+          <div class="detail-section-title">📤 上报信息</div>
+          <div class="detail-info-grid">
+            <div class="detail-info-label">接收部门</div>
+            <div class="detail-info-value" style="color:var(--accent-red);font-weight:600;">${a.reportInfo.department}</div>
+            <div class="detail-info-label">上报人</div>
+            <div class="detail-info-value">${a.reportInfo.reportedBy}</div>
+            <div class="detail-info-label">上报时间</div>
+            <div class="detail-info-value">${a.reportInfo.reportedAt}</div>
+            <div class="detail-info-label">上报说明</div>
+            <div class="detail-info-value">${a.reportInfo.note || '—'}</div>
+          </div>
+        </div>
+        ` : ''}
 
         <div class="detail-section">
           <div class="detail-section-title">📜 处置记录时间线</div>
@@ -360,6 +376,51 @@
       renderAlertList();
       renderDetail(alert);
       showNotification('状态已更新', `告警已标记为「${getStatusText(status)}」`, 'success');
+    }
+
+    function showReportDialog(id) {
+      const alert = AlertAPI.getById(id);
+      if (!alert) return;
+      showModal(`📤 上报告警 #${String(id).slice(-6)}`, `
+        <div style="padding:4px 0;">
+          <div style="background:var(--bg-tertiary);padding:12px;border-radius:6px;margin-bottom:16px;font-size:13px;color:var(--text-secondary);">
+            <strong style="color:var(--text-primary);">${alert.hitWord}</strong>
+            · ${alert.content.length > 50 ? alert.content.slice(0, 50) + '...' : alert.content}
+          </div>
+          <div class="form-group">
+            <label class="form-label">接收部门 <span style="color:var(--accent-red);">*</span></label>
+            <select class="form-select" id="reportDept">
+              <option value="">请选择接收部门</option>
+              <option>市委宣传部舆情处</option>
+              <option>市公安局网安支队</option>
+              <option>市网信办网络管理处</option>
+              <option>市委政法委综治处</option>
+              <option>市应急管理局</option>
+              <option>市卫健委宣传处</option>
+              <option>区县对应部门</option>
+              <option>其他（请在说明中注明）</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">上报说明</label>
+            <textarea class="form-textarea" id="reportNote" style="min-height:90px;" placeholder="请简要说明上报原因、涉及范围、需要协同处置的事项等..."></textarea>
+          </div>
+        </div>
+      `, () => {
+        const dept = document.getElementById('reportDept').value;
+        const note = document.getElementById('reportNote').value.trim();
+        if (!dept) {
+          showNotification('请选择接收部门', '', 'warning');
+          return false;
+        }
+        const updated = AlertAPI.report(id, dept, note);
+        if (updated) {
+          renderStats();
+          renderAlertList();
+          renderDetail(updated);
+          showNotification('上报成功', `已提交至「${dept}」`, 'success');
+        }
+      });
     }
 
     function saveRemark(id) {

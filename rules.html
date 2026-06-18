@@ -16,6 +16,8 @@
       <div class="btn-group">
         <button class="btn" onclick="exportRules()">⬇ 导出规则</button>
         <button class="btn" onclick="openBatchImportModal()">📥 批量导入</button>
+        <button class="btn" onclick="restoreDefaultWords()">↩ 恢复默认</button>
+        <button class="btn btn-danger" onclick="clearAllWords()">🗑 清空全部</button>
         <button class="btn btn-primary" onclick="openAddModal()">＋ 新增敏感词</button>
       </div>
     </div>
@@ -343,11 +345,161 @@
     // ==========================================
     // 批量导入
     // ==========================================
+    let parsedImportItems = []; // 存放解析后的候选词
+    let importFileRawText = ''; // 存放文件读取后的文本
+
+    function parseCategoryName(name) {
+      if (!name) return null;
+      const key = Object.keys(WORD_CATEGORIES).find(k =>
+        WORD_CATEGORIES[k].name === name.trim() || k === name.trim().toLowerCase()
+      );
+      return key || null;
+    }
+    function parseMatchType(s) {
+      if (!s) return null;
+      s = s.trim().toLowerCase();
+      if (s.includes('近似') || s === 'fuzzy') return 'fuzzy';
+      if (s.includes('精确') || s === 'exact') return 'exact';
+      return null;
+    }
+    function parseLevel(s) {
+      if (!s) return null;
+      s = s.trim();
+      if (s.includes('一') || s === '1' || s === '一级') return '一级';
+      if (s.includes('二') || s === '2' || s === '二级') return '二级';
+      if (s.includes('三') || s === '3' || s === '三级') return '三级';
+      if (s.includes('四') || s === '4' || s === '四级') return '四级';
+      return null;
+    }
+
+    // 解析 CSV / 文本，返回带状态的数组 [{word,category,matchType,level,remark,status: 'ok'|'dup'|'empty',reason}]
+    function parseImportText(text, defaultCategory, defaultMatch, defaultLevel) {
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const results = [];
+      lines.forEach(line => {
+        // 处理 CSV，兼容引号
+        const parts = [];
+        let cur = '', inQuote = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') { inQuote = !inQuote; continue; }
+          if (ch === ',' && !inQuote) { parts.push(cur); cur = ''; continue; }
+          cur += ch;
+        }
+        parts.push(cur);
+        const cols = parts.map(p => p.trim());
+
+        const word = cols[0];
+        if (!word) {
+          results.push({ word: '', status: 'empty', reason: '词为空' });
+          return;
+        }
+
+        let category = parseCategoryName(cols[1]) || defaultCategory;
+        let matchType = parseMatchType(cols[2]) || defaultMatch;
+        let level = parseLevel(cols[3]) || defaultLevel;
+        const remark = cols[4] || '';
+
+        let status = 'ok', reason = '';
+        if (WordAPI.exists(word)) {
+          status = 'dup';
+          reason = '词已存在';
+        } else {
+          const fuzzy = WordAPI.fuzzyExists(word);
+          if (fuzzy.length > 0) {
+            status = 'fuzzy';
+            reason = `与「${fuzzy[0].word}」相似`;
+          }
+        }
+
+        results.push({ word, category, matchType, level, remark, status, reason });
+      });
+      return results;
+    }
+
+    function renderImportPreview(modal) {
+      const preview = modal.querySelector('#import-preview');
+      const list = modal.querySelector('#import-preview-list');
+      const stats = modal.querySelector('#import-stats');
+      if (!parsedImportItems.length) {
+        preview.style.display = 'none';
+        return;
+      }
+      preview.style.display = 'block';
+      const okCount = parsedImportItems.filter(i => i.status === 'ok' || i.status === 'fuzzy').length;
+      const dupCount = parsedImportItems.filter(i => i.status === 'dup').length;
+      const emptyCount = parsedImportItems.filter(i => i.status === 'empty').length;
+
+      stats.innerHTML = `
+        <span style="color:var(--accent-green);">✔ 可导入 ${okCount}</span>
+        <span style="color:var(--accent-orange);margin-left:16px;">⚠ 相似/重复 ${dupCount}</span>
+        ${emptyCount > 0 ? `<span style="color:var(--text-muted);margin-left:16px;">✘ 空行 ${emptyCount}</span>` : ''}
+      `;
+
+      const statusTagMap = {
+        ok: '<span class="tag tag-green" style="font-size:10px;">可导入</span>',
+        fuzzy: '<span class="tag tag-yellow" style="font-size:10px;">相似</span>',
+        dup: '<span class="tag tag-red" style="font-size:10px;">已存在</span>',
+        empty: '<span class="tag tag-gray" style="font-size:10px;">空行</span>'
+      };
+
+      const rows = parsedImportItems.slice(0, 50).map(item => {
+        const catInfo = WORD_CATEGORIES[item.category] || WORD_CATEGORIES.other;
+        const matchTxt = item.matchType === 'fuzzy' ? '🔍 近似' : '🎯 精确';
+        return `
+          <tr style="${item.status === 'dup' || item.status === 'empty' ? 'opacity:0.4;' : ''}">
+            <td style="padding:4px 6px;">${statusTagMap[item.status] || ''}</td>
+            <td style="padding:4px 6px;font-weight:600;">${item.word || '-'}</td>
+            <td style="padding:4px 6px;"><span class="tag tag-${catInfo.color}" style="font-size:10px;">${catInfo.icon} ${catInfo.name}</span></td>
+            <td style="padding:4px 6px;">${matchTxt}</td>
+            <td style="padding:4px 6px;">${item.level}</td>
+            <td style="padding:4px 6px;color:var(--text-muted);font-size:11px;">${item.reason || item.remark || '-'}</td>
+          </tr>
+        `;
+      }).join('');
+
+      list.innerHTML = `
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead style="color:var(--text-muted);font-size:11px;">
+            <tr>
+              <th style="padding:4px 6px;text-align:left;width:60px;">状态</th>
+              <th style="padding:4px 6px;text-align:left;">敏感词</th>
+              <th style="padding:4px 6px;text-align:left;width:80px;">类别</th>
+              <th style="padding:4px 6px;text-align:left;width:60px;">匹配</th>
+              <th style="padding:4px 6px;text-align:left;width:50px;">等级</th>
+              <th style="padding:4px 6px;text-align:left;">说明</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        ${parsedImportItems.length > 50 ? `<div style="padding:4px 6px;color:var(--text-muted);font-size:11px;">... 仅显示前 50 条，共 ${parsedImportItems.length} 行</div>` : ''}
+      `;
+    }
+
+    function reparseImportText(modal) {
+      const defaultCategory = modal.querySelector('#import-default-category').value;
+      const defaultMatch = modal.querySelector('#import-default-match').value;
+      const defaultLevel = modal.querySelector('#import-default-level').value;
+
+      let text = '';
+      if (currentImportMode === 'text') {
+        text = modal.querySelector('#import-text').value;
+      } else {
+        text = importFileRawText;
+      }
+      parsedImportItems = parseImportText(text, defaultCategory, defaultMatch, defaultLevel);
+      renderImportPreview(modal);
+    }
+
     function openBatchImportModal() {
+      parsedImportItems = [];
+      importFileRawText = '';
+      currentImportMode = 'text';
+
       const formHTML = `
-        <div style="margin-bottom:16px;">
+        <div style="margin-bottom:14px;">
           <div class="form-label">导入方式</div>
-          <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <div style="display:flex;gap:8px;margin-bottom:10px;">
             <button class="btn btn-primary" onclick="switchImportMode('text')" id="mode-text">📝 文本粘贴</button>
             <button class="btn" onclick="switchImportMode('file')" id="mode-file">📁 CSV 上传</button>
           </div>
@@ -357,11 +509,11 @@
           <div class="form-group">
             <label class="form-label">每行一个敏感词，支持格式：</label>
             <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;line-height:1.6;">
-              格式1（纯文本）：敏感词1<br>
-              格式2（带分类）：敏感词,类别,匹配方式,等级,备注<br>
-              例：<code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">暴力事件,涉稳,精确,二级,暴力类敏感词</code>
+              格式1（纯文本）：<code>敏感词</code><br>
+              格式2（完整）：<code>敏感词,类别,匹配方式,等级,备注</code><br>
+              例：<code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">暴力事件,涉稳,精确,二级,群体性事件预警</code>
             </div>
-            <textarea class="form-textarea" id="import-text" style="min-height:180px;font-family:Consolas,monospace;font-size:12px;" placeholder="暴力事件&#10;上访&#10;谣言,谣言,近似,三级,谣言类敏感词"></textarea>
+            <textarea class="form-textarea" id="import-text" style="min-height:150px;font-family:Consolas,monospace;font-size:12px;" placeholder="暴力事件&#10;上访&#10;谣言,谣言,近似,三级,谣言类敏感词"></textarea>
           </div>
         </div>
 
@@ -370,20 +522,21 @@
             <label class="form-label">上传 CSV 文件</label>
             <input type="file" id="import-file" accept=".csv,.txt" class="form-input" style="padding:6px;">
             <div style="font-size:12px;color:var(--text-muted);margin-top:8px;">
-              CSV 格式：敏感词,类别,匹配方式,等级,备注
+              CSV 列顺序：<code>敏感词, 类别, 匹配方式, 等级, 备注</code>（类别可用中文名「涉政/涉稳/灾害」等，匹配支持「精确/近似」，等级支持「一级/二级/三级/四级」）
             </div>
+            <div id="import-file-status" style="font-size:12px;color:var(--text-muted);margin-top:6px;display:none;"></div>
           </div>
         </div>
 
         <div class="form-row">
           <div class="form-group">
-            <label class="form-label">默认类别（未指定时）</label>
+            <label class="form-label">默认类别</label>
             <select class="form-select" id="import-default-category">
               ${Object.entries(WORD_CATEGORIES).map(([k, i]) => `<option value="${k}">${i.icon} ${i.name}</option>`).join('')}
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label">默认匹配方式</label>
+            <label class="form-label">默认匹配</label>
             <select class="form-select" id="import-default-match">
               <option value="exact">🎯 精确命中</option>
               <option value="fuzzy">🔍 近似命中</option>
@@ -400,79 +553,65 @@
           </div>
         </div>
 
-        <div id="import-preview" style="display:none;">
-          <div class="form-label">导入预览（最多显示10条）</div>
-          <div id="import-preview-list" style="max-height:160px;overflow-y:auto;background:var(--bg-primary);border-radius:6px;padding:8px;border:1px solid var(--border);"></div>
+        <div id="import-preview" style="display:none;margin-top:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <div class="form-label" style="margin:0;">导入预览</div>
+            <div id="import-stats" style="font-size:12px;"></div>
+          </div>
+          <div id="import-preview-list" style="max-height:220px;overflow-y:auto;background:var(--bg-primary);border-radius:6px;padding:6px;border:1px solid var(--border);"></div>
         </div>
       `;
 
-      const modal = showModal('批量导入敏感词', formHTML, (overlay) => {
-        const mode = currentImportMode;
-        const defaultCategory = overlay.querySelector('#import-default-category').value;
-        const defaultMatch = overlay.querySelector('#import-default-match').value;
-        const defaultLevel = overlay.querySelector('#import-default-level').value;
-
-        let text = '';
-        if (mode === 'text') {
-          text = overlay.querySelector('#import-text').value.trim();
-        } else {
-          const fileInput = overlay.querySelector('#import-file');
-          if (!fileInput.files || fileInput.files.length === 0) {
-            showNotification('请选择文件', '', 'warning');
-            return false;
-          }
-          // 文件方式通过 reader 异步，这里简化处理文本
-          showNotification('CSV 上传功能', '请使用文本粘贴方式体验', 'info');
+      const modal = showModal('📥 批量导入敏感词', formHTML, (overlay) => {
+        // 先重新解析一次以确保最新
+        reparseImportText(overlay);
+        const items = parsedImportItems.filter(i => i.status === 'ok' || i.status === 'fuzzy');
+        if (items.length === 0) {
+          showNotification('无有效数据', '请检查输入内容或默认设置', 'warning');
           return false;
         }
-
-        if (!text) {
-          showNotification('请输入内容', '', 'warning');
-          return false;
-        }
-
-        const lines = text.split('\n').filter(l => l.trim());
-        const items = lines.map(line => {
-          const parts = line.split(',').map(p => p.trim());
-          const word = parts[0];
-          let category = defaultCategory;
-          let matchType = defaultMatch;
-          let level = defaultLevel;
-          let remark = '';
-
-          if (parts.length >= 2) {
-            const catKey = Object.keys(WORD_CATEGORIES).find(k => WORD_CATEGORIES[k].name === parts[1]);
-            if (catKey) category = catKey;
-          }
-          if (parts.length >= 3) {
-            if (parts[2].includes('近似') || parts[2] === 'fuzzy') matchType = 'fuzzy';
-            if (parts[2].includes('精确') || parts[2] === 'exact') matchType = 'exact';
-          }
-          if (parts.length >= 4) {
-            if (parts[3].includes('一')) level = '一级';
-            else if (parts[3].includes('二')) level = '二级';
-            else if (parts[3].includes('三')) level = '三级';
-            else if (parts[3].includes('四')) level = '四级';
-          }
-          if (parts.length >= 5) remark = parts[4];
-
-          return { word, category, matchType, level, remark };
-        });
-
         const result = WordAPI.batchImport(items);
         renderStats();
         renderCategoryTabs();
         renderRulesTable();
 
         let msg = `成功导入 ${result.success} 条`;
-        if (result.skipped > 0) msg += `，跳过 ${result.skipped} 条（重复）`;
+        if (result.skipped > 0) msg += `，跳过 ${result.skipped} 条`;
         showNotification('导入完成', msg, result.success > 0 ? 'success' : 'warning');
       });
 
-      // 绑定模式切换
-      modal.querySelector('#mode-text').onclick = () => switchImportMode('text', modal);
-      modal.querySelector('#mode-file').onclick = () => switchImportMode('file', modal);
-      modal.querySelector('#import-text')?.addEventListener('input', () => updateImportPreview(modal));
+      // 绑定切换
+      modal.querySelector('#mode-text').onclick = () => {
+        switchImportMode('text', modal);
+        reparseImportText(modal);
+      };
+      modal.querySelector('#mode-file').onclick = () => {
+        switchImportMode('file', modal);
+        reparseImportText(modal);
+      };
+      modal.querySelector('#import-text').addEventListener('input', () => reparseImportText(modal));
+      modal.querySelector('#import-default-category').addEventListener('change', () => reparseImportText(modal));
+      modal.querySelector('#import-default-match').addEventListener('change', () => reparseImportText(modal));
+      modal.querySelector('#import-default-level').addEventListener('change', () => reparseImportText(modal));
+      modal.querySelector('#import-file').addEventListener('change', (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const status = modal.querySelector('#import-file-status');
+        status.style.display = 'block';
+        status.textContent = `⏳ 正在读取 ${file.name} ...`;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          importFileRawText = ev.target.result || '';
+          status.textContent = `✔ 已读取 ${file.name}（${importFileRawText.split(/\r?\n/).filter(l=>l.trim()).length} 行）`;
+          status.style.color = 'var(--accent-green)';
+          reparseImportText(modal);
+        };
+        reader.onerror = () => {
+          status.textContent = '✘ 读取失败，请重试';
+          status.style.color = 'var(--accent-red)';
+        };
+        reader.readAsText(file, 'UTF-8');
+      });
     }
 
     let currentImportMode = 'text';
@@ -497,8 +636,44 @@
       }
     }
 
-    function updateImportPreview(modal) {
-      // 简化版本，可后续扩展
+    function clearAllWords() {
+      const total = WordAPI.getAll().length;
+      if (total === 0) {
+        showNotification('规则库已为空', '无需清空', 'info');
+        return;
+      }
+      showModal('⚠️ 确认清空全部规则', `
+        <div style="padding:8px 0;">
+          <p style="margin-bottom:12px;">确定要清空 <strong style="color:var(--accent-red);">${total} 条</strong> 敏感词规则吗？</p>
+          <div style="background:var(--accent-red)10;color:var(--accent-red);padding:10px;border-radius:6px;font-size:12px;">
+            ⚠ 清空后刷新页面和切换页面也不会恢复，只能手动重新录入或使用「恢复默认」功能。
+          </div>
+        </div>
+      `, () => {
+        WordAPI.clear();
+        renderStats();
+        renderCategoryTabs();
+        renderRulesTable();
+        showNotification('已清空', `规则库已清空（${total} 条规则已删除）`, 'success');
+      });
+    }
+
+    function restoreDefaultWords() {
+      showModal('↩ 恢复默认规则', `
+        <div style="padding:8px 0;">
+          <p style="margin-bottom:8px;">确定恢复内置的默认敏感词吗？</p>
+          <div style="font-size:12px;color:var(--text-muted);">
+            · 将覆盖现有所有规则<br>
+            · 包含 15 条常见敏感词（涉政/涉稳/灾害/谣言等）
+          </div>
+        </div>
+      `, () => {
+        const words = WordAPI.restoreDefaults();
+        renderStats();
+        renderCategoryTabs();
+        renderRulesTable();
+        showNotification('已恢复', `成功恢复 ${words.length} 条默认规则`, 'success');
+      });
     }
   </script>
 </body>

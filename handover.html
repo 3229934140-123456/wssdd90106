@@ -124,13 +124,35 @@
       </div>
     </div>
 
-    <div class="summary-grid" style="grid-template-columns: 1fr 1fr; margin-bottom:0;">
+    <div class="summary-grid" style="grid-template-columns: 1.2fr 1fr; margin-bottom:0;">
       <div class="panel">
         <div class="panel-header">
-          <div class="panel-title">� 本班次处置记录时间线</div>
-          <span class="tag tag-blue" id="recordsCount">0 条记录</span>
+          <div class="panel-title">📜 本班次处置记录复盘</div>
+          <div class="btn-group" style="gap:6px;">
+            <select class="form-select filter-select" id="filterOperator" onchange="renderHandoverRecords()" style="min-width:100px;">
+              <option value="">全部值班员</option>
+            </select>
+            <select class="form-select filter-select" id="filterType" onchange="renderHandoverRecords()" style="min-width:100px;">
+              <option value="">全部类型</option>
+              <option value="detect">系统检测</option>
+              <option value="status">状态变更</option>
+              <option value="remark">添加备注</option>
+              <option value="report">上报</option>
+            </select>
+            <select class="form-select filter-select" id="filterLevel" onchange="renderHandoverRecords()" style="min-width:100px;">
+              <option value="">全部等级</option>
+              <option value="red">🔴 一级</option>
+              <option value="orange">🟠 二级</option>
+              <option value="yellow">🟡 三级</option>
+              <option value="blue">🔵 四级</option>
+            </select>
+          </div>
         </div>
-        <div class="panel-body" style="max-height:420px;overflow-y:auto;">
+        <div style="padding:0 16px 8px;font-size:12px;color:var(--text-muted);border-bottom:1px solid var(--border);">
+          共 <span id="recordsCount" style="color:var(--accent-blue);font-weight:600;">0</span> 条记录，
+          符合筛选 <span id="recordsFiltered" style="color:var(--accent-orange);font-weight:600;">0</span> 条
+        </div>
+        <div class="panel-body" style="max-height:520px;overflow-y:auto;">
           <div id="handoverRecords"></div>
         </div>
       </div>
@@ -179,6 +201,7 @@
     }
 
     function renderAll() {
+      initFilterOperator();
       renderStats();
       renderTopWords();
       renderCategoryProgress();
@@ -381,17 +404,41 @@
     }
 
     // ==========================================
-    // 处置记录时间线
+    // 处置记录时间线（带筛选）
     // ==========================================
+    function initFilterOperator() {
+      const logs = LogAPI.getAll();
+      const operators = [...new Set(logs.map(l => l.operator))].filter(Boolean);
+      const sel = document.getElementById('filterOperator');
+      if (!sel) return;
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">全部值班员</option>' + operators.map(op => `<option value="${op}">${op}</option>`).join('');
+      sel.value = cur;
+    }
+
     function renderHandoverRecords() {
-      const logs = LogAPI.getTimeline();
-      document.getElementById('recordsCount').textContent = `${logs.length} 条记录`;
+      const allLogs = LogAPI.getTimeline();
+      document.getElementById('recordsCount').textContent = allLogs.length;
+
+      const fOperator = document.getElementById('filterOperator')?.value || '';
+      const fType = document.getElementById('filterType')?.value || '';
+      const fLevel = document.getElementById('filterLevel')?.value || '';
+
+      let logs = allLogs;
+      if (fOperator) logs = logs.filter(l => l.operator === fOperator);
+      if (fType) logs = logs.filter(l => l.type === fType);
+      if (fLevel) logs = logs.filter(l => {
+        const a = AlertAPI.getById(l.alertId);
+        return a && a.level === fLevel;
+      });
+
+      document.getElementById('recordsFiltered').textContent = logs.length;
 
       if (logs.length === 0) {
         document.getElementById('handoverRecords').innerHTML = `
           <div class="empty-state">
             <div class="empty-state-icon">📝</div>
-            <div class="empty-state-text">暂无处置记录</div>
+            <div class="empty-state-text">${allLogs.length === 0 ? '暂无处置记录' : '当前筛选条件下无匹配记录'}</div>
           </div>
         `;
         return;
@@ -403,34 +450,39 @@
         const levelColor = alert?.level === 'red' ? 'var(--accent-red)' :
                            alert?.level === 'orange' ? 'var(--accent-orange)' :
                            alert?.level === 'yellow' ? 'var(--accent-yellow)' : 'var(--accent-blue)';
+        const levelIcon = alert?.level === 'red' ? '🔴' : alert?.level === 'orange' ? '🟠' : alert?.level === 'yellow' ? '🟡' : '🔵';
 
         return `
-          <div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px dashed var(--border);position:relative;">
+          <div class="timeline-record" style="display:flex;gap:12px;padding:12px 0;border-bottom:1px dashed var(--border);cursor:pointer;transition:background 0.15s;"
+               onmouseenter="this.style.background='var(--bg-tertiary)'" onmouseleave="this.style.background=''"
+               onclick="${log.alertId && log.alertId > 0 ? `goToAlert(${log.alertId})` : ''}"
+               title="${log.alertId && log.alertId > 0 ? '点击查看对应告警详情' : ''}">
             <div style="flex-shrink:0;display:flex;flex-direction:column;align-items:center;">
               <div style="width:10px;height:10px;border-radius:50%;background:${levelColor};margin-top:6px;"></div>
             </div>
             <div style="flex:1;min-width:0;">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px;">
+                <div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                  ${alert ? `<span style="font-size:12px;color:var(--text-muted);">${levelIcon} ${WORD_CATEGORIES[alert.category]?.name || ''}</span>` : ''}
                   <span class="tag ${getLogTypeTagClass(log.type)}" style="font-size:11px;">${getLogTypeText(log.type)}</span>
                   ${log.fromStatus && log.toStatus && log.fromStatus !== log.toStatus ? `
                     <span style="font-size:12px;color:var(--text-muted);">
                       ${getStatusText(log.fromStatus)} → ${getStatusText(log.toStatus)}
                     </span>
                   ` : ''}
+                  ${log.extra?.department ? `<span class="tag tag-red" style="font-size:11px;">📤 ${log.extra.department}</span>` : ''}
                 </div>
-                <div style="font-size:11px;color:var(--text-muted);font-family:Consolas;">
+                <div style="font-size:11px;color:var(--text-muted);font-family:Consolas;white-space:nowrap;">
                   ${formatTime(log.createdAt)}
                 </div>
               </div>
               <div style="font-size:12px;color:var(--text-secondary);margin-bottom:4px;">
                 <strong style="color:var(--text-primary);">${log.operator}</strong>
-                · 告警 #${String(log.alertId).slice(-6)}
+                ${log.alertId && log.alertId > 0 ? `· 告警 #${String(log.alertId).slice(-6)}` : ''}
               </div>
               <div style="font-size:13px;color:var(--text-primary);margin-bottom:4px;">${log.remark}</div>
-              <div style="font-size:11px;color:var(--text-muted);cursor:pointer;" onclick="goToAlert(${log.alertId})" title="查看详情">
-                🔗 ${alertSummary}
-              </div>
+              ${log.extra?.note ? `<div style="font-size:12px;color:var(--accent-blue);margin-bottom:4px;padding:4px 8px;background:var(--accent-blue)10;border-radius:4px;">💬 ${log.extra.note}</div>` : ''}
+              ${alert ? `<div style="font-size:11px;color:var(--text-muted);">🔗 ${alertSummary}</div>` : ''}
             </div>
           </div>
         `;
