@@ -32,7 +32,9 @@ const STORAGE_KEYS = {
   LOGS: 'yq_operation_logs',
   HANDOVER_NOTES: 'yq_handover_notes',
   READ_IDS: 'yq_read_alert_ids',
-  LAST_RESET: 'yq_last_reset_date'
+  LAST_RESET: 'yq_last_reset_date',
+  IMPORT_BATCHES: 'yq_import_batches',
+  FOLLOW_UPS: 'yq_follow_ups'
 };
 
 // ==========================================
@@ -548,6 +550,12 @@ const WordAPI = {
       byCategory[k] = sensitiveWords.filter(w => w.category === k).length;
     });
     return { total, enabled, disabled: total - enabled, totalHits, level1, level2, byCategory };
+  },
+  getEnabled() {
+    return sensitiveWords.filter(w => w.enabled);
+  },
+  getByWord(word) {
+    return sensitiveWords.find(w => w.word === word);
   }
 };
 
@@ -764,6 +772,128 @@ const keyAccounts = [
   { name: '短视频娱乐博主', avatar: '娱', platform: 'douyin', fans: 1250000, alertCount: 8, riskLevel: 'medium', lastActive: '3小时前', color: 'yellow' },
   { name: '本地论坛管理员', avatar: '论', platform: 'tianya', fans: 67000, alertCount: 6, riskLevel: 'low', lastActive: '5小时前', color: 'blue' }
 ];
+
+// ==========================================
+// 导入批次 API
+// ==========================================
+const ImportBatchAPI = {
+  _getAll() {
+    const data = Store.get(STORAGE_KEYS.IMPORT_BATCHES, null);
+    return Array.isArray(data) ? data : [];
+  },
+  _save(list) {
+    Store.set(STORAGE_KEYS.IMPORT_BATCHES, list);
+  },
+  getAll() {
+    return this._getAll().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  },
+  getById(id) {
+    return this._getAll().find(b => b.id === id);
+  },
+  add(batchData) {
+    const batch = {
+      id: Date.now(),
+      fileName: batchData.fileName || '手动导入',
+      totalCount: batchData.totalCount || 0,
+      successCount: batchData.successCount || 0,
+      skippedCount: batchData.skippedCount || 0,
+      importedWordIds: batchData.importedWordIds || [],
+      skippedItems: batchData.skippedItems || [],
+      rawText: batchData.rawText || '',
+      operator: batchData.operator || getCurrentShift().operator,
+      createdAt: formatNowDateTime(),
+      rolledBack: false
+    };
+    const list = this._getAll();
+    list.unshift(batch);
+    this._save(list);
+    return batch;
+  },
+  rollback(id) {
+    const batch = this.getById(id);
+    if (!batch || batch.rolledBack) return false;
+
+    // 回滚：删除本次导入的所有词
+    const wordIds = batch.importedWordIds || [];
+    wordIds.forEach(wid => {
+      const idx = sensitiveWords.findIndex(w => w.id === wid);
+      if (idx > -1) sensitiveWords.splice(idx, 1);
+    });
+    saveWords();
+
+    // 标记批次已回滚
+    const list = this._getAll();
+    const b = list.find(x => x.id === id);
+    if (b) {
+      b.rolledBack = true;
+      b.rollbackAt = formatNowDateTime();
+      b.rollbackBy = getCurrentShift().operator;
+    }
+    this._save(list);
+
+    // 记录日志
+    LogAPI.add({
+      alertId: 0,
+      type: 'status',
+      operator: getCurrentShift().operator,
+      remark: `【规则回滚】批次 #${String(id).slice(-6)}，撤销 ${wordIds.length} 条敏感词`
+    });
+
+    return wordIds.length;
+  }
+};
+
+// ==========================================
+// 协同跟进记录 API
+// ==========================================
+const FollowUpAPI = {
+  _getAll() {
+    const data = Store.get(STORAGE_KEYS.FOLLOW_UPS, null);
+    return Array.isArray(data) ? data : [];
+  },
+  _save(list) {
+    Store.set(STORAGE_KEYS.FOLLOW_UPS, list);
+  },
+  getAll() {
+    return this._getAll().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  },
+  getByAlertId(alertId) {
+    return this.getAll().filter(f => f.alertId === alertId);
+  },
+  add(followUpData) {
+    const record = {
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      alertId: followUpData.alertId,
+      type: followUpData.type || 'progress', // progress / result / attachment
+      title: followUpData.title || '',
+      content: followUpData.content || '',
+      attachment: followUpData.attachment || null, // {name, url}
+      operator: followUpData.operator || getCurrentShift().operator,
+      createdAt: new Date().toISOString()
+    };
+    const list = this._getAll();
+    list.push(record);
+    this._save(list);
+
+    // 同步写一条操作日志
+    LogAPI.add({
+      alertId: record.alertId,
+      type: 'remark',
+      operator: record.operator,
+      remark: `${record.type === 'progress' ? '【跟进进展】' : record.type === 'result' ? '【办结反馈】' : '【附件上传】'}${record.title}：${record.content}`
+    });
+
+    return record;
+  },
+  remove(id) {
+    const list = this._getAll();
+    const idx = list.findIndex(f => f.id === id);
+    if (idx === -1) return false;
+    list.splice(idx, 1);
+    this._save(list);
+    return true;
+  }
+};
 
 // ==========================================
 // 班次信息

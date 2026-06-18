@@ -16,6 +16,7 @@
       <div class="btn-group">
         <button class="btn" onclick="exportRules()">⬇ 导出规则</button>
         <button class="btn" onclick="openBatchImportModal()">📥 批量导入</button>
+        <button class="btn" onclick="openBatchHistoryModal()">📚 批次记录</button>
         <button class="btn" onclick="restoreDefaultWords()">↩ 恢复默认</button>
         <button class="btn btn-danger" onclick="clearAllWords()">🗑 清空全部</button>
         <button class="btn btn-primary" onclick="openAddModal()">＋ 新增敏感词</button>
@@ -54,16 +55,17 @@
         <table class="data-table">
           <thead>
             <tr>
-              <th style="width:80px;">状态</th>
-              <th>敏感词</th>
-              <th style="width:100px;">所属类别</th>
-              <th style="width:100px;">匹配方式</th>
-              <th style="width:100px;">处置等级</th>
-              <th style="width:100px;">命中次数</th>
-              <th>备注说明</th>
-              <th style="width:110px;">创建人/时间</th>
-              <th style="width:140px;">操作</th>
-            </tr>
+            <th style="width:80px;">状态</th>
+            <th>敏感词</th>
+            <th style="width:100px;">所属类别</th>
+            <th style="width:100px;">匹配方式</th>
+            <th style="width:100px;">处置等级</th>
+            <th style="width:100px;">命中次数</th>
+            <th style="width:90px;">命中告警</th>
+            <th>备注说明</th>
+            <th style="width:110px;">创建人/时间</th>
+            <th style="width:140px;">操作</th>
+          </tr>
           </thead>
           <tbody id="rulesTableBody"></tbody>
         </table>
@@ -80,6 +82,13 @@
     renderTopNav('rules');
     renderStats();
     renderCategoryTabs();
+
+    // 检查 URL 参数
+    const urlParams = new URLSearchParams(window.location.search);
+    const searchQ = urlParams.get('search');
+    if (searchQ) {
+      document.getElementById('searchInput').value = decodeURIComponent(searchQ);
+    }
     renderRulesTable();
 
     document.getElementById('searchInput').addEventListener('input', renderRulesTable);
@@ -136,7 +145,7 @@
 
       if (filtered.length === 0) {
         document.getElementById('rulesTableBody').innerHTML = `
-          <tr><td colspan="9">
+          <tr><td colspan="10">
             <div class="empty-state">
               <div class="empty-state-icon">📭</div>
               <div class="empty-state-text">暂无匹配的规则，试试调整筛选条件</div>
@@ -151,6 +160,7 @@
         const levelClass = w.level === '一级' ? 'tag-red' : w.level === '二级' ? 'tag-orange' : w.level === '三级' ? 'tag-yellow' : 'tag-blue';
         const matchClass = w.matchType === 'exact' ? 'tag-purple' : 'tag-cyan';
         const catClass = 'tag-' + catInfo.color;
+        const hitAlertCount = AlertAPI.getAll().filter(a => a.hitWord === w.word).length;
 
         return `
           <tr>
@@ -165,6 +175,12 @@
             <td><span class="tag ${matchClass}">${w.matchType === 'exact' ? '🎯 精确命中' : '🔍 近似命中'}</span></td>
             <td><span class="tag ${levelClass}">${w.level}</span></td>
             <td><strong style="color:var(--accent-cyan);">${w.hitCount.toLocaleString()}</strong></td>
+            <td>
+              <button class="btn btn-sm ${hitAlertCount > 0 ? 'btn-ghost' : ''}" 
+                      ${hitAlertCount > 0 ? `onclick="gotoWordAlerts('${w.word}')"` : 'disabled style="opacity:0.4;cursor:not-allowed;"'}>
+                🚨 ${hitAlertCount}
+              </button>
+            </td>
             <td style="color:var(--text-secondary);">${w.remark || '—'}</td>
             <td style="font-size:12px;color:var(--text-muted);">${w.creator}<br>${w.createdAt}</td>
             <td>
@@ -372,10 +388,11 @@
       return null;
     }
 
-    // 解析 CSV / 文本，返回带状态的数组 [{word,category,matchType,level,remark,status: 'ok'|'dup'|'empty',reason}]
+    // 解析 CSV / 文本，返回带状态的数组 [{word,category,matchType,level,remark,status: 'ok'|'dup'|'empty'|'dup_in_batch',reason}]
     function parseImportText(text, defaultCategory, defaultMatch, defaultLevel) {
       const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
       const results = [];
+      const seenWords = new Set(); // 批次内去重
       lines.forEach(line => {
         // 处理 CSV，兼容引号
         const parts = [];
@@ -394,6 +411,13 @@
           results.push({ word: '', status: 'empty', reason: '词为空' });
           return;
         }
+
+        // 批次内去重
+        if (seenWords.has(word)) {
+          results.push({ word, category: '', matchType: '', level: '', remark: '', status: 'dup_in_batch', reason: '批次内重复' });
+          return;
+        }
+        seenWords.add(word);
 
         let category = parseCategoryName(cols[1]) || defaultCategory;
         let matchType = parseMatchType(cols[2]) || defaultMatch;
@@ -427,7 +451,7 @@
       }
       preview.style.display = 'block';
       const okCount = parsedImportItems.filter(i => i.status === 'ok' || i.status === 'fuzzy').length;
-      const dupCount = parsedImportItems.filter(i => i.status === 'dup').length;
+      const dupCount = parsedImportItems.filter(i => i.status === 'dup' || i.status === 'dup_in_batch').length;
       const emptyCount = parsedImportItems.filter(i => i.status === 'empty').length;
 
       stats.innerHTML = `
@@ -440,6 +464,7 @@
         ok: '<span class="tag tag-green" style="font-size:10px;">可导入</span>',
         fuzzy: '<span class="tag tag-yellow" style="font-size:10px;">相似</span>',
         dup: '<span class="tag tag-red" style="font-size:10px;">已存在</span>',
+        dup_in_batch: '<span class="tag tag-orange" style="font-size:10px;">批次内重复</span>',
         empty: '<span class="tag tag-gray" style="font-size:10px;">空行</span>'
       };
 
@@ -562,6 +587,8 @@
         </div>
       `;
 
+      let pendingFileName = '手动导入';
+
       const modal = showModal('📥 批量导入敏感词', formHTML, (overlay) => {
         // 先重新解析一次以确保最新
         reparseImportText(overlay);
@@ -570,7 +597,28 @@
           showNotification('无有效数据', '请检查输入内容或默认设置', 'warning');
           return false;
         }
+
+        // 先记录要导入的条数，导入后再回填 ID
+        const totalCount = parsedImportItems.length;
+        const skippedItems = parsedImportItems.filter(i => i.status !== 'ok' && i.status !== 'fuzzy')
+          .map(i => ({ word: i.word, reason: i.reason, status: i.status }));
+        const rawText = currentImportMode === 'text'
+          ? overlay.querySelector('#import-text').value
+          : importFileRawText;
+
         const result = WordAPI.batchImport(items);
+
+        // 记录批次
+        ImportBatchAPI.add({
+          fileName: pendingFileName,
+          totalCount,
+          successCount: result.success,
+          skippedCount: result.skipped,
+          importedWordIds: result.words.map(w => w.id),
+          skippedItems,
+          rawText
+        });
+
         renderStats();
         renderCategoryTabs();
         renderRulesTable();
@@ -596,6 +644,7 @@
       modal.querySelector('#import-file').addEventListener('change', (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
+        pendingFileName = file.name;
         const status = modal.querySelector('#import-file-status');
         status.style.display = 'block';
         status.textContent = `⏳ 正在读取 ${file.name} ...`;
@@ -673,6 +722,79 @@
         renderCategoryTabs();
         renderRulesTable();
         showNotification('已恢复', `成功恢复 ${words.length} 条默认规则`, 'success');
+      });
+    }
+
+    function gotoWordAlerts(word) {
+      window.location.href = `alerts.html?search=${encodeURIComponent(word)}`;
+    }
+
+    function openBatchHistoryModal() {
+      const batches = ImportBatchAPI.getAll();
+      if (batches.length === 0) {
+        showNotification('暂无批次记录', '先导入一些敏感词试试吧', 'info');
+        return;
+      }
+
+      const statusText = (b) => b.rolledBack
+        ? `<span class="tag tag-gray" style="font-size:11px;">已回滚</span>`
+        : `<span class="tag tag-green" style="font-size:11px;">已生效</span>`;
+
+      const listHTML = batches.map(b => `
+        <div style="padding:14px 0;border-bottom:1px solid var(--border);">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <strong>${b.fileName}</strong>
+              ${statusText(b)}
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);font-family:Consolas;">${b.createdAt}</div>
+          </div>
+          <div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">
+            <span style="color:var(--accent-green);">✔ ${b.successCount} 条导入</span>
+            <span style="margin:0 10px;color:var(--text-muted);">|</span>
+            <span style="color:var(--accent-orange);">⚠ ${b.skippedCount} 条跳过</span>
+            <span style="margin:0 10px;color:var(--text-muted);">|</span>
+            <span style="color:var(--text-muted);">by ${b.operator}</span>
+          </div>
+          ${b.skippedItems && b.skippedItems.length > 0 ? `
+            <div style="font-size:12px;color:var(--text-muted);background:var(--bg-tertiary);padding:6px 10px;border-radius:4px;margin-bottom:8px;max-height:80px;overflow-y:auto;">
+              跳过原因：${b.skippedItems.slice(0, 5).map(s => `<code style="margin-right:8px;">${s.word}(${s.reason})</code>`).join('')}
+              ${b.skippedItems.length > 5 ? `... 等 ${b.skippedItems.length} 条` : ''}
+            </div>
+          ` : ''}
+          ${!b.rolledBack ? `
+            <button class="btn btn-sm" style="color:var(--accent-red);" onclick="rollbackBatch(${b.id}, this)">↩ 撤销本次导入</button>
+          ` : `
+            <div style="font-size:11px;color:var(--text-muted);">已由 ${b.rollbackBy} 于 ${b.rollbackAt} 撤销</div>
+          `}
+        </div>
+      `).join('');
+
+      showModal('📚 导入批次记录', `
+        <div style="max-height:500px;overflow-y:auto;">
+          ${listHTML}
+        </div>
+      `);
+    }
+
+    function rollbackBatch(id, btnEl) {
+      const batch = ImportBatchAPI.getById(id);
+      if (!batch) return;
+      showModal('⚠️ 确认撤销', `
+        <div style="padding:8px 0;">
+          <p style="margin-bottom:8px;">确定撤销本次导入吗？</p>
+          <div style="font-size:12px;color:var(--text-muted);">
+            将删除「${batch.fileName}」批次导入的 <strong style="color:var(--accent-red);">${batch.importedWordIds.length} 条</strong> 敏感词
+          </div>
+        </div>
+      `, () => {
+        const count = ImportBatchAPI.rollback(id);
+        renderStats();
+        renderCategoryTabs();
+        renderRulesTable();
+        if (btnEl) btnEl.closest('.modal-overlay')?.remove();
+        openBatchHistoryModal();
+        showNotification('撤销成功', `已回滚 ${count} 条规则`, 'success');
       });
     }
   </script>

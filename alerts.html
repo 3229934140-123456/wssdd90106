@@ -95,6 +95,7 @@
     // 检查 URL 参数
     const urlParams = new URLSearchParams(window.location.search);
     const highlightId = urlParams.get('highlight');
+    const searchQ = urlParams.get('search');
     if (highlightId) {
       const numId = parseInt(highlightId);
       if (AlertAPI.getById(numId)) {
@@ -103,10 +104,15 @@
         readIds = ReadAlerts.get();
       }
     }
+    if (searchQ) {
+      document.getElementById('searchInput').value = decodeURIComponent(searchQ);
+    }
     if (selectedAlertId) {
       renderAlertList();
       const a = AlertAPI.getById(selectedAlertId);
       if (a) renderDetail(a);
+    } else {
+      renderAlertList();
     }
 
     startSimulatedAlerts((newAlert) => {
@@ -258,26 +264,70 @@
             <span class="tag ${getLogTypeTagClass(log.type)}" style="font-size:11px;">${getLogTypeText(log.type)}</span>
           </div>
           <div style="flex:1;min-width:0;">
-            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:2px;">
+            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:3px;">
               <strong style="color:var(--text-primary);">${log.operator}</strong>
               · ${formatTime(log.createdAt)}
             </div>
-            <div style="font-size:13px;color:var(--text-primary);">${log.remark}</div>
+            <div style="font-size:13px;">${log.remark}</div>
             ${log.fromStatus && log.toStatus && log.fromStatus !== log.toStatus ? `
-              <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+              <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">
                 ${getStatusText(log.fromStatus)} → ${getStatusText(log.toStatus)}
               </div>
             ` : ''}
           </div>
         </div>
-      `).join('') : '<div style="color:var(--text-muted);font-size:12px;">暂无处置记录</div>';
+      `).join('') : `
+        <div class="empty-state"><div class="empty-state-icon">📝</div><div class="empty-state-text">暂无处置记录</div></div>
+      `;
+
+      // 获取该告警的协同跟进记录
+      const followUps = FollowUpAPI.getByAlertId(a.id);
+      const followTypeInfo = {
+        progress: { icon: '📝', tagClass: 'tag-blue', text: '跟进进展' },
+        result: { icon: '✅', tagClass: 'tag-green', text: '办结反馈' },
+        attachment: { icon: '📎', tagClass: 'tag-purple', text: '附件' }
+      };
+      const followUpsHTML = followUps.length > 0 ? followUps.map(fu => {
+        const info = followTypeInfo[fu.type] || followTypeInfo.progress;
+        return `
+          <div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px dashed var(--border);">
+            <div style="flex-shrink:0;">
+              <span class="tag ${info.tagClass}" style="font-size:11px;">${info.icon} ${info.text}</span>
+            </div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:12px;color:var(--text-secondary);margin-bottom:3px;">
+                <strong style="color:var(--text-primary);">${fu.title || '未命名'}</strong>
+                · ${fu.operator} · ${formatTime(fu.createdAt)}
+              </div>
+              <div style="font-size:13px;">${fu.content || '—'}</div>
+              ${fu.attachment ? `
+                <div style="margin-top:6px;font-size:12px;">
+                  <a href="${fu.attachment.url}" target="_blank" style="color:var(--accent-blue);text-decoration:none;">
+                    📎 ${fu.attachment.name}
+                  </a>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        `;
+      }).join('') : `
+        <div class="empty-state"><div class="empty-state-icon">🔗</div><div class="empty-state-text">暂无协同跟进记录</div></div>
+      `;
+
+      const statusInfoBadge = a.status === 'reporting' && a.reportInfo
+        ? `<span class="tag tag-red" style="margin-left:8px;">📤 ${a.reportInfo.department} · ${a.reportInfo.reportedAt}</span>`
+        : '';
+      const wordRule = WordAPI.getByWord(a.hitWord);
+      const ruleBadge = wordRule
+        ? `<span class="tag tag-cyan" style="margin-left:8px;cursor:pointer;" onclick="gotoRule('${encodeURIComponent(a.hitWord)}')" title="查看命中规则">📋 ${a.hitWord}${wordRule.enabled ? '' : '（已停用）'}</span>`
+        : `<span class="tag tag-gray" style="margin-left:8px;">规则已删除</span>`;
 
       const html = `
         <div class="detail-section">
           <div class="detail-section-title">基本信息</div>
           <div class="detail-info-grid">
             <div class="detail-info-label">告警ID</div>
-            <div class="detail-info-value">#${String(a.id).slice(-6)}</div>
+            <div class="detail-info-value">#${String(a.id).slice(-6)}${ruleBadge}</div>
             <div class="detail-info-label">来源平台</div>
             <div class="detail-info-value">${platformInfo.icon} ${platformInfo.name}</div>
             <div class="detail-info-label">命中类别</div>
@@ -350,9 +400,46 @@
             <div class="detail-info-value">${a.reportInfo.reportedAt}</div>
             <div class="detail-info-label">上报说明</div>
             <div class="detail-info-value">${a.reportInfo.note || '—'}</div>
+            <div class="detail-info-label">当前状态</div>
+            <div class="detail-info-value">
+              ${a.status === 'done' 
+                ? '<span class="tag tag-green">✅ 已办结</span>' 
+                : a.status === 'reporting' 
+                  ? '<span class="tag tag-red">⏳ 待反馈</span>' 
+                  : `<span class="tag ${getStatusTagClass(a.status)}">${getStatusText(a.status)}</span>`}
+            </div>
           </div>
         </div>
         ` : ''}
+
+        ${(a.status === 'reporting' || a.status === 'verifying') ? `
+        <div class="detail-section">
+          <div class="detail-section-title">➕ 添加协同跟进记录</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+            <select class="form-select" id="followType">
+              <option value="progress">📝 跟进进展</option>
+              <option value="result">✅ 办结反馈</option>
+              <option value="attachment">📎 附件链接</option>
+            </select>
+            <input type="text" class="form-input" id="followTitle" placeholder="简要标题（如：已电话联系）">
+          </div>
+          <textarea class="form-textarea" id="followContent" style="min-height:70px;margin-bottom:8px;" placeholder="详细描述处理进展、联系结果、处置意见等..."></textarea>
+          <div id="followAttachmentBlock" style="display:none;margin-bottom:8px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+              <input type="text" class="form-input" id="followAttachmentName" placeholder="附件名称">
+              <input type="text" class="form-input" id="followAttachmentUrl" placeholder="附件链接（内网/OA/网盘）">
+            </div>
+          </div>
+          <button class="btn btn-sm btn-primary" style="width:100%;" onclick="addFollowUp(${a.id})">💾 保存跟进记录</button>
+        </div>
+        ` : ''}
+
+        <div class="detail-section">
+          <div class="detail-section-title">🔗 协同跟进记录时间线</div>
+          <div style="max-height:300px;overflow-y:auto;">
+            ${followUpsHTML}
+          </div>
+        </div>
 
         <div class="detail-section">
           <div class="detail-section-title">📜 处置记录时间线</div>
@@ -363,6 +450,19 @@
       `;
       document.getElementById('detailBody').innerHTML = html;
       document.getElementById('detailStatusTag').innerHTML = `<span class="tag ${getStatusTagClass(a.status)}">${getStatusText(a.status)}</span>`;
+
+      // 绑定跟进类型切换
+      const followType = document.getElementById('followType');
+      if (followType) {
+        followType.addEventListener('change', function() {
+          const block = document.getElementById('followAttachmentBlock');
+          if (this.value === 'attachment') {
+            block.style.display = 'block';
+          } else {
+            block.style.display = 'none';
+          }
+        });
+      }
     }
 
     function updateStatus(id, status) {
@@ -441,6 +541,52 @@
       readIds = ReadAlerts.get();
       renderAlertList();
       showNotification('操作成功', '所有告警已标记为已读', 'success');
+    }
+
+    function addFollowUp(id) {
+      const typeEl = document.getElementById('followType');
+      const titleEl = document.getElementById('followTitle');
+      const contentEl = document.getElementById('followContent');
+      const attachNameEl = document.getElementById('followAttachmentName');
+      const attachUrlEl = document.getElementById('followAttachmentUrl');
+
+      const type = typeEl?.value || 'progress';
+      const title = titleEl?.value?.trim();
+      const content = contentEl?.value?.trim();
+
+      if (!title || !content) {
+        showNotification('请填写完整', '标题和内容不能为空', 'warning');
+        return;
+      }
+
+      let attachment = null;
+      if (type === 'attachment') {
+        const name = attachNameEl?.value?.trim();
+        const url = attachUrlEl?.value?.trim();
+        if (!name || !url) {
+          showNotification('请填写附件信息', '附件名称和链接不能为空', 'warning');
+          return;
+        }
+        attachment = { name, url };
+      }
+
+      const record = FollowUpAPI.add({
+        alertId: id,
+        type,
+        title,
+        content,
+        attachment
+      });
+
+      if (record) {
+        const alert = AlertAPI.getById(id);
+        renderDetail(alert);
+        showNotification('保存成功', `已添加${type === 'progress' ? '跟进进展' : type === 'result' ? '办结反馈' : '附件'}`, 'success');
+      }
+    }
+
+    function gotoRule(word) {
+      window.location.href = `rules.html?search=${encodeURIComponent(word)}`;
     }
   </script>
 </body>

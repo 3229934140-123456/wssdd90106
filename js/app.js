@@ -127,50 +127,44 @@ function showNotification(title, text, type = 'info') {
 let simulatedAlertInterval = null;
 function startSimulatedAlerts(onNewAlert) {
   if (simulatedAlertInterval) return;
-  
-  const sampleContents = [
-    { category: 'stability', hitWord: '非法集会', word: '非法集会', level: 'red', platform: 'weibo' },
-    { category: 'rumor', hitWord: '假消息', word: '假消息', level: 'yellow', platform: 'zhihu' },
-    { category: 'disaster', hitWord: '山体滑坡', word: '山体滑坡', level: 'orange', platform: 'toutiao' },
-    { category: 'politics', hitWord: '政府腐败', word: '政府腐败', level: 'red', platform: 'wechat' },
-    { category: 'other', hitWord: '跳楼自杀', word: '跳楼自杀', level: 'orange', platform: 'bilibili' },
-    { category: 'stability', hitWord: '罢工游行', word: '罢工游行', level: 'red', platform: 'tieba' },
-    { category: 'vulgar', hitWord: '低俗色情', word: '低俗色情', level: 'blue', platform: 'douyin' },
-    { category: 'rumor', hitWord: '内幕消息', word: '内幕消息', level: 'yellow', platform: 'kuaishou' }
-  ];
-  
+
   const authors = ['热心市民', '网络观察员', '匿名投稿', '本地通', '时事评论员', '普通网友'];
-  
+
   simulatedAlertInterval = setInterval(() => {
     if (Math.random() > 0.5) return;
-    
-    const sample = sampleContents[Math.floor(Math.random() * sampleContents.length)];
-    const author = authors[Math.floor(Math.random() * authors.length)];
+
+    // 从启用的规则里随机选一条
+    const enabledWords = WordAPI.getEnabled();
+    if (enabledWords.length === 0) return;
+
+    const word = enabledWords[Math.floor(Math.random() * enabledWords.length)];
+    const levelMap = { '一级': 'red', '二级': 'orange', '三级': 'yellow', '四级': 'blue' };
     const platforms = Object.keys(PLATFORMS);
-    const platform = sample.platform || platforms[Math.floor(Math.random() * platforms.length)];
-    
+    const platform = platforms[Math.floor(Math.random() * platforms.length)];
+    const author = authors[Math.floor(Math.random() * authors.length)];
+
     const newAlert = AlertAPI.add({
       platform,
-      category: sample.category,
-      hitWord: sample.hitWord,
-      matchType: Math.random() > 0.5 ? '精确命中' : '近似命中',
+      category: word.category,
+      hitWord: word.word,
+      matchType: word.matchType === 'fuzzy' ? '近似命中' : '精确命中',
       author,
       authorFans: Math.floor(Math.random() * 100000),
-      content: `最新消息：${sample.word}相关内容正在网络上传播，请相关部门关注。用户发布内容中包含敏感词汇"${sample.word}"，请值班员及时研判处置。`,
+      content: `最新消息：${word.word}相关内容正在网络上传播，请相关部门关注。用户发布内容中包含敏感词汇"${word.word}"，请值班员及时研判处置。`,
       context: `该内容发布后短时间内获得多人转发，正在监测传播路径。`,
       heat: Math.floor(30 + Math.random() * 70),
       repost: Math.floor(Math.random() * 2000),
       comment: Math.floor(Math.random() * 1000),
       like: Math.floor(Math.random() * 5000),
       deadline: Math.floor(15 + Math.random() * 120),
-      level: sample.level
+      level: levelMap[word.level] || 'yellow'
     });
 
     if (AlertAPI.getAll().length > 100) {
       const oldest = AlertAPI.getAll().slice(-1)[0];
       if (oldest) AlertAPI.remove(oldest.id);
     }
-    
+
     if (onNewAlert) onNewAlert(newAlert);
   }, 15000);
 }
