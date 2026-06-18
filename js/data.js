@@ -473,7 +473,7 @@ const WordAPI = {
     saveWords();
     return newWord;
   },
-  batchImport(list) {
+  batchImport(list, skipDuplicateCheck = false) {
     const results = { success: 0, skipped: 0, errors: [], words: [] };
     const now = formatNowDateTime();
     const operator = getCurrentShift().operator;
@@ -483,7 +483,7 @@ const WordAPI = {
         results.skipped++;
         return;
       }
-      if (this.exists(item.word)) {
+      if (!skipDuplicateCheck && this.exists(item.word)) {
         results.skipped++;
         results.errors.push({ word: item.word, reason: '已存在' });
         return;
@@ -715,6 +715,30 @@ const AlertAPI = {
       icon: info.icon,
       count: stats[key]?.count || 0
     }));
+  },
+  updateJudgment(id, judgmentData) {
+    const alert = this.getById(id);
+    if (!alert) return null;
+    alert.judgment = {
+      nature: judgmentData.nature || '',
+      scope: judgmentData.scope || '',
+      response: judgmentData.response || '',
+      riskLevel: judgmentData.riskLevel || '',
+      savedBy: getCurrentShift().operator,
+      savedAt: formatNowDateTime()
+    };
+    saveAlerts();
+    LogAPI.add({
+      alertId: id,
+      type: 'remark',
+      operator: getCurrentShift().operator,
+      remark: `【研判结论】已更新，风险等级：${alert.judgment.riskLevel || '未填写'}`
+    });
+    return alert;
+  },
+  getAlertsByWord(word) {
+    return alerts.filter(a => a.hitWord === word)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
 };
 

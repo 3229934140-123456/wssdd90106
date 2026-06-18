@@ -412,6 +412,70 @@
         </div>
         ` : ''}
 
+        <div class="detail-section">
+          <div class="detail-section-title">
+            🔍 研判结论
+            ${a.judgment ? `
+              <span style="margin-left:8px;">
+                <button class="btn btn-xs" onclick="toggleJudgmentEdit(${a.id})" id="judgmentToggleBtn">✏️ 编辑</button>
+              </span>
+            ` : ''}
+          </div>
+          ${a.judgment ? `
+            <div id="judgmentView">
+              <div class="detail-info-grid">
+                <div class="detail-info-label">事件性质</div>
+                <div class="detail-info-value">${a.judgment.nature || '—'}</div>
+                <div class="detail-info-label">影响范围</div>
+                <div class="detail-info-value">${a.judgment.scope || '—'}</div>
+                <div class="detail-info-label">建议口径</div>
+                <div class="detail-info-value">${a.judgment.response || '—'}</div>
+                <div class="detail-info-label">风险等级</div>
+                <div class="detail-info-value">
+                  ${a.judgment.riskLevel 
+                    ? `<span class="tag ${a.judgment.riskLevel === '高' ? 'tag-red' : a.judgment.riskLevel === '中' ? 'tag-orange' : a.judgment.riskLevel === '低' ? 'tag-green' : 'tag-gray'}">${a.judgment.riskLevel}风险</span>` 
+                    : '—'}
+                </div>
+                <div class="detail-info-label">研判人</div>
+                <div class="detail-info-value">${a.judgment.savedBy}</div>
+                <div class="detail-info-label">研判时间</div>
+                <div class="detail-info-value">${a.judgment.savedAt}</div>
+              </div>
+            </div>
+            <div id="judgmentEdit" style="display:none;">
+          ` : `
+            <div id="judgmentEdit">
+          `}
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+              <div>
+                <label class="form-label">事件性质</label>
+                <input type="text" class="form-input" id="judgment-nature" placeholder="如：涉稳群体性事件、一般谣言..." value="${a.judgment?.nature || ''}">
+              </div>
+              <div>
+                <label class="form-label">风险等级</label>
+                <select class="form-select" id="judgment-risk">
+                  <option value="">请选择</option>
+                  <option value="高" ${a.judgment?.riskLevel === '高' ? 'selected' : ''}>🔴 高风险</option>
+                  <option value="中" ${a.judgment?.riskLevel === '中' ? 'selected' : ''}>🟠 中风险</option>
+                  <option value="低" ${a.judgment?.riskLevel === '低' ? 'selected' : ''}>🟢 低风险</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">影响范围</label>
+              <textarea class="form-textarea" id="judgment-scope" style="min-height:60px;" placeholder="如：涉及XX区、涉事人数约XX人、传播范围XX平台...">${a.judgment?.scope || ''}</textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">建议口径</label>
+              <textarea class="form-textarea" id="judgment-response" style="min-height:60px;" placeholder="对外回应口径、需协调部门、注意事项...">${a.judgment?.response || ''}</textarea>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button class="btn btn-sm btn-primary" onclick="saveJudgment(${a.id})">💾 保存研判结论</button>
+              ${a.judgment ? `<button class="btn btn-sm" onclick="toggleJudgmentEdit(${a.id}, true)">取消</button>` : ''}
+            </div>
+          </div>
+        </div>
+
         ${(a.status === 'reporting' || a.status === 'verifying') ? `
         <div class="detail-section">
           <div class="detail-section-title">➕ 添加协同跟进记录</div>
@@ -587,6 +651,47 @@
 
     function gotoRule(word) {
       window.location.href = `rules.html?search=${encodeURIComponent(word)}`;
+    }
+
+    function saveJudgment(id) {
+      const nature = document.getElementById('judgment-nature').value.trim();
+      const scope = document.getElementById('judgment-scope').value.trim();
+      const response = document.getElementById('judgment-response').value.trim();
+      const riskLevel = document.getElementById('judgment-risk').value;
+
+      if (!nature && !scope && !response && !riskLevel) {
+        showNotification('请至少填写一项', '', 'warning');
+        return;
+      }
+
+      const alert = AlertAPI.updateJudgment(id, { nature, scope, response, riskLevel });
+      if (alert) {
+        renderDetail(alert);
+        showNotification('研判结论已保存', '交接班页和复盘均可引用', 'success');
+      }
+    }
+
+    function toggleJudgmentEdit(id, cancel = false) {
+      const viewEl = document.getElementById('judgmentView');
+      const editEl = document.getElementById('judgmentEdit');
+      const btnEl = document.getElementById('judgmentToggleBtn');
+      if (!viewEl || !editEl) return;
+
+      if (viewEl.style.display !== 'none') {
+        viewEl.style.display = 'none';
+        editEl.style.display = 'block';
+        if (btnEl) btnEl.textContent = '👁 查看';
+      } else {
+        if (cancel) {
+          // 取消则重新渲染恢复原值
+          const alert = AlertAPI.getById(id);
+          if (alert) renderDetail(alert);
+        } else {
+          viewEl.style.display = 'block';
+          editEl.style.display = 'none';
+          if (btnEl) btnEl.textContent = '✏️ 编辑';
+        }
+      }
     }
   </script>
 </body>

@@ -61,7 +61,7 @@
             <th style="width:100px;">匹配方式</th>
             <th style="width:100px;">处置等级</th>
             <th style="width:100px;">命中次数</th>
-            <th style="width:90px;">命中告警</th>
+            <th style="width:150px;">命中分析</th>
             <th>备注说明</th>
             <th style="width:110px;">创建人/时间</th>
             <th style="width:140px;">操作</th>
@@ -176,10 +176,16 @@
             <td><span class="tag ${levelClass}">${w.level}</span></td>
             <td><strong style="color:var(--accent-cyan);">${w.hitCount.toLocaleString()}</strong></td>
             <td>
-              <button class="btn btn-sm ${hitAlertCount > 0 ? 'btn-ghost' : ''}" 
-                      ${hitAlertCount > 0 ? `onclick="gotoWordAlerts('${w.word}')"` : 'disabled style="opacity:0.4;cursor:not-allowed;"'}>
-                🚨 ${hitAlertCount}
-              </button>
+              <div style="display:flex;gap:4px;">
+                <button class="btn btn-sm ${hitAlertCount > 0 ? 'btn-ghost' : ''}" 
+                        ${hitAlertCount > 0 ? `onclick="gotoWordAlerts('${w.word}')"` : 'disabled style="opacity:0.4;cursor:not-allowed;"'}>
+                  🚨 ${hitAlertCount}
+                </button>
+                <button class="btn btn-sm btn-ghost" 
+                        ${hitAlertCount > 0 ? `onclick="showRuleEffect('${w.id}')"` : 'disabled style="opacity:0.4;cursor:not-allowed;"'}>
+                  📊
+                </button>
+              </div>
             </td>
             <td style="color:var(--text-secondary);">${w.remark || '—'}</td>
             <td style="font-size:12px;color:var(--text-muted);">${w.creator}<br>${w.createdAt}</td>
@@ -458,6 +464,7 @@
         <span style="color:var(--accent-green);">✔ 可导入 ${okCount}</span>
         <span style="color:var(--accent-orange);margin-left:16px;">⚠ 相似/重复 ${dupCount}</span>
         ${emptyCount > 0 ? `<span style="color:var(--text-muted);margin-left:16px;">✘ 空行 ${emptyCount}</span>` : ''}
+        ${dupCount > 0 || emptyCount > 0 ? `<span style="color:var(--text-muted);margin-left:16px;">总 ${parsedImportItems.length} 行，跳过 ${dupCount + emptyCount} 行</span>` : ''}
       `;
 
       const statusTagMap = {
@@ -468,11 +475,12 @@
         empty: '<span class="tag tag-gray" style="font-size:10px;">空行</span>'
       };
 
-      const rows = parsedImportItems.slice(0, 50).map(item => {
+      const displayItems = parsedImportItems.filter(i => i.status !== 'dup_in_batch' && i.status !== 'empty');
+      const rows = displayItems.slice(0, 50).map(item => {
         const catInfo = WORD_CATEGORIES[item.category] || WORD_CATEGORIES.other;
         const matchTxt = item.matchType === 'fuzzy' ? '🔍 近似' : '🎯 精确';
         return `
-          <tr style="${item.status === 'dup' || item.status === 'empty' ? 'opacity:0.4;' : ''}">
+          <tr style="${item.status === 'dup' ? 'opacity:0.4;' : ''}">
             <td style="padding:4px 6px;">${statusTagMap[item.status] || ''}</td>
             <td style="padding:4px 6px;font-weight:600;">${item.word || '-'}</td>
             <td style="padding:4px 6px;"><span class="tag tag-${catInfo.color}" style="font-size:10px;">${catInfo.icon} ${catInfo.name}</span></td>
@@ -497,7 +505,8 @@
           </thead>
           <tbody>${rows}</tbody>
         </table>
-        ${parsedImportItems.length > 50 ? `<div style="padding:4px 6px;color:var(--text-muted);font-size:11px;">... 仅显示前 50 条，共 ${parsedImportItems.length} 行</div>` : ''}
+        ${displayItems.length > 50 ? `<div style="padding:4px 6px;color:var(--text-muted);font-size:11px;">... 仅显示前 50 条有效记录，共 ${displayItems.length} 条</div>` : ''}
+        ${(dupCount > 0 || emptyCount > 0) ? `<div style="padding:4px 6px;color:var(--text-muted);font-size:11px;">（已隐藏 ${parsedImportItems.filter(i => i.status === 'dup_in_batch').length} 条批次内重复 / ${emptyCount} 条空行，跳过原因将记录到批次详情）</div>` : ''}
       `;
     }
 
@@ -598,22 +607,22 @@
           return false;
         }
 
-        // 先记录要导入的条数，导入后再回填 ID
         const totalCount = parsedImportItems.length;
+        const okCount = items.length;
+        const skippedCount = totalCount - okCount;
         const skippedItems = parsedImportItems.filter(i => i.status !== 'ok' && i.status !== 'fuzzy')
           .map(i => ({ word: i.word, reason: i.reason, status: i.status }));
         const rawText = currentImportMode === 'text'
           ? overlay.querySelector('#import-text').value
           : importFileRawText;
 
-        const result = WordAPI.batchImport(items);
+        const result = WordAPI.batchImport(items, true); // 跳过内部重复检查，因为预览已验证
 
-        // 记录批次
         ImportBatchAPI.add({
           fileName: pendingFileName,
           totalCount,
-          successCount: result.success,
-          skippedCount: result.skipped,
+          successCount: okCount, // 与预览完全一致
+          skippedCount,
           importedWordIds: result.words.map(w => w.id),
           skippedItems,
           rawText
@@ -727,6 +736,115 @@
 
     function gotoWordAlerts(word) {
       window.location.href = `alerts.html?search=${encodeURIComponent(word)}`;
+    }
+
+    function showRuleEffect(id) {
+      const word = WordAPI.getById(id);
+      if (!word) return;
+
+      const alerts = AlertAPI.getAlertsByWord(word.word);
+      const total = alerts.length;
+      const falseAlarm = alerts.filter(a => a.status === 'false_alarm').length;
+      const verifying = alerts.filter(a => a.status === 'verifying').length;
+      const reporting = alerts.filter(a => a.status === 'reporting').length;
+      const done = alerts.filter(a => a.status === 'done').length;
+      const pending = alerts.filter(a => a.status === 'pending').length;
+      const falseRate = total > 0 ? (falseAlarm / total * 100).toFixed(1) : 0;
+
+      const catInfo = WORD_CATEGORIES[word.category] || WORD_CATEGORIES.other;
+
+      const recentAlerts = alerts.slice(0, 10);
+      const toggleLogs = LogAPI.getAll().filter(l => l.type === 'toggle' && l.remark.includes(word.word));
+
+      const html = `
+        <div style="padding:4px 0;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+            <div style="background:var(--bg-tertiary);border-radius:6px;padding:12px;">
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">📊 总命中数</div>
+              <div style="font-size:24px;font-weight:700;color:var(--accent-cyan);">${total}</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">${word.enabled ? '<span class="tag tag-green" style="font-size:10px;">✅ 运行中</span>' : '<span class="tag tag-gray" style="font-size:10px;">⏸ 已停用</span>'}</div>
+            </div>
+            <div style="background:var(--bg-tertiary);border-radius:6px;padding:12px;">
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">🚫 误报率</div>
+              <div style="font-size:24px;font-weight:700;color:${Number(falseRate) > 50 ? 'var(--accent-red)' : Number(falseRate) > 20 ? 'var(--accent-orange)' : 'var(--accent-green)'};">${falseRate}%</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">${falseAlarm} 条误报 / ${total} 条命中</div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:8px;margin-bottom:16px;">
+            <div style="background:var(--bg-tertiary);border-radius:6px;padding:10px;text-align:center;">
+              <div style="font-size:18px;font-weight:700;color:var(--accent-orange);">${verifying}</div>
+              <div style="font-size:11px;color:var(--text-muted);">🔍 待核实</div>
+            </div>
+            <div style="background:var(--bg-tertiary);border-radius:6px;padding:10px;text-align:center;">
+              <div style="font-size:18px;font-weight:700;color:var(--accent-red);">${reporting}</div>
+              <div style="font-size:11px;color:var(--text-muted);">📤 需上报</div>
+            </div>
+            <div style="background:var(--bg-tertiary);border-radius:6px;padding:10px;text-align:center;">
+              <div style="font-size:18px;font-weight:700;color:var(--accent-green);">${done}</div>
+              <div style="font-size:11px;color:var(--text-muted);">✅ 已办结</div>
+            </div>
+            <div style="background:var(--bg-tertiary);border-radius:6px;padding:10px;text-align:center;">
+              <div style="font-size:18px;font-weight:700;color:var(--accent-yellow);">${pending}</div>
+              <div style="font-size:11px;color:var(--text-muted);">⏳ 待处理</div>
+            </div>
+          </div>
+
+          ${toggleLogs.length > 0 ? `
+            <div style="background:var(--accent-yellow)10;border:1px solid var(--accent-yellow)20;border-radius:6px;padding:12px;margin-bottom:16px;">
+              <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--accent-yellow);">🔄 启停记录（${toggleLogs.length} 次）</div>
+              ${toggleLogs.slice(0, 5).map(log => `
+                <div style="font-size:11px;padding:4px 0;">
+                  <span style="color:var(--text-muted);">${formatTime(log.createdAt)}</span> · 
+                  <strong>${log.operator}</strong> · 
+                  <span style="color:${log.remark.includes('启用') ? 'var(--accent-green)' : 'var(--accent-orange)'};">${log.remark}</span>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+
+          <div>
+            <div style="font-size:12px;font-weight:600;margin-bottom:8px;">📋 最近命中告警 (${recentAlerts.length}/${total})</div>
+            <div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;">
+              ${recentAlerts.length > 0 ? `
+                <table style="width:100%;border-collapse:collapse;font-size:11px;">
+                  <thead style="background:var(--bg-tertiary);position:sticky;top:0;">
+                    <tr>
+                      <th style="padding:8px;text-align:left;">时间</th>
+                      <th style="padding:8px;text-align:left;">平台</th>
+                      <th style="padding:8px;text-align:left;">内容摘要</th>
+                      <th style="padding:8px;text-align:left;">状态</th>
+                      <th style="padding:8px;text-align:left;">热度</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${recentAlerts.map(a => `
+                      <tr style="border-top:1px solid var(--border);cursor:pointer;" onmouseenter="this.style.background='var(--bg-tertiary)'" onmouseleave="this.style.background=''" onclick="window.location.href='alerts.html?highlight=${a.id}'">
+                        <td style="padding:6px 8px;color:var(--text-muted);">${formatTime(a.createdAt)}</td>
+                        <td style="padding:6px 8px;">${a.platform}</td>
+                        <td style="padding:6px 8px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${a.content}</td>
+                        <td style="padding:6px 8px;"><span class="tag ${getStatusTagClass(a.status)}" style="font-size:10px;">${getStatusText(a.status)}</span></td>
+                        <td style="padding:6px 8px;">🔥 ${a.heat}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              ` : '<div style="text-align:center;padding:30px;color:var(--text-muted);">暂无命中记录</div>'}
+            </div>
+          </div>
+
+          <div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--border);font-size:11px;color:var(--text-muted);">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+              <div>规则词：<strong style="color:var(--accent-red);">${word.word}</strong></div>
+              <div>类别：<span class="tag tag-${catInfo.color}" style="font-size:10px;">${catInfo.icon} ${catInfo.name}</span></div>
+              <div>匹配：${word.matchType === 'exact' ? '🎯 精确命中' : '🔍 近似命中'}</div>
+              <div>等级：${word.level}</div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      showModal(`📊 命中效果分析 · ${word.word}`, html, null, true);
     }
 
     function openBatchHistoryModal() {

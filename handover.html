@@ -131,6 +131,7 @@
           <div class="btn-group" style="gap:6px;">
             <button class="btn btn-sm" id="viewTimelineBtn" onclick="switchRecordsView('timeline')">⏱ 时间线</button>
             <button class="btn btn-sm btn-ghost" id="viewGroupBtn" onclick="switchRecordsView('group')">🗂 按告警</button>
+            <button class="btn btn-sm btn-ghost" id="viewCardBtn" onclick="switchRecordsView('card')">📋 复盘卡片</button>
           </div>
         </div>
         <div style="padding:8px 16px;border-bottom:1px solid var(--border);display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
@@ -435,6 +436,7 @@
       recordsViewMode = mode;
       document.getElementById('viewTimelineBtn').className = mode === 'timeline' ? 'btn btn-sm' : 'btn btn-sm btn-ghost';
       document.getElementById('viewGroupBtn').className = mode === 'group' ? 'btn btn-sm' : 'btn btn-sm btn-ghost';
+      document.getElementById('viewCardBtn').className = mode === 'card' ? 'btn btn-sm' : 'btn btn-sm btn-ghost';
       renderHandoverRecords();
     }
 
@@ -533,7 +535,7 @@
         }).join('');
 
         document.getElementById('handoverRecords').innerHTML = html;
-      } else {
+      } else if (recordsViewMode === 'group') {
         // 按告警聚合视图
         const grouped = {};
         logs.forEach(log => {
@@ -572,9 +574,19 @@
             <div style="padding:8px 0 4px;">
               <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">🔗 协同跟进 (${followUps.length})</div>
               ${followUps.map(fu => `
-                <div style="font-size:11px;padding:3px 0;color:var(--text-secondary);">
-                  <span class="tag tag-blue" style="font-size:10px;">${fu.type === 'progress' ? '📝 跟进' : fu.type === 'result' ? '✅ 办结' : '📎 附件'}</span>
-                  <strong style="margin:0 4px;">${fu.title}</strong> · ${fu.operator} · ${formatTime(fu.createdAt)}
+                <div style="font-size:11px;padding:4px 0 8px;color:var(--text-secondary);border-bottom:1px dashed var(--border);">
+                  <div style="margin-bottom:4px;">
+                    <span class="tag tag-blue" style="font-size:10px;">${fu.type === 'progress' ? '📝 跟进进展' : fu.type === 'result' ? '✅ 办结反馈' : '📎 附件'}</span>
+                    <strong style="margin:0 4px;color:var(--text-primary);">${fu.title}</strong> · ${fu.operator} · ${formatTime(fu.createdAt)}
+                  </div>
+                  <div style="font-size:12px;color:var(--text-primary);padding:2px 0;">${fu.content || '—'}</div>
+                  ${fu.attachment ? `
+                    <div style="font-size:11px;margin-top:4px;">
+                      <a href="${fu.attachment.url}" target="_blank" style="color:var(--accent-blue);text-decoration:none;">
+                        📎 ${fu.attachment.name}
+                      </a>
+                    </div>
+                  ` : ''}
                 </div>
               `).join('')}
             </div>
@@ -602,6 +614,187 @@
         }).join('');
 
         document.getElementById('handoverRecords').innerHTML = html;
+      } else {
+        // 复盘卡片视图
+        const grouped = {};
+        logs.forEach(log => {
+          const aid = log.alertId || 'system';
+          if (!grouped[aid]) grouped[aid] = { alert: AlertAPI.getById(aid), logs: [] };
+          grouped[aid].logs.push(log);
+        });
+
+        const cards = Object.entries(grouped).filter(([aid]) => aid !== 'system' && aid !== '0').map(([aid, g]) => {
+          const alert = g.alert;
+          if (!alert) return '';
+
+          const levelIcon = alert.level === 'red' ? '🔴' : alert.level === 'orange' ? '🟠' : alert.level === 'yellow' ? '🟡' : '🔵';
+          const levelName = alert.level === 'red' ? '一级' : alert.level === 'orange' ? '二级' : alert.level === 'yellow' ? '三级' : '四级';
+          const catInfo = WORD_CATEGORIES[alert.category] || WORD_CATEGORIES.other;
+          const followUps = FollowUpAPI.getByAlertId(alert.id);
+
+          const timelineHtml = g.logs.map(log => `
+            <div style="display:flex;gap:10px;padding:6px 0;">
+              <div style="width:14px;position:relative;">
+                <div style="width:8px;height:8px;border-radius:50%;background:var(--accent-blue);position:absolute;top:5px;left:3px;"></div>
+                <div style="width:1px;background:var(--border);position:absolute;top:13px;bottom:-6px;left:6px;"></div>
+              </div>
+              <div style="flex:1;">
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:2px;">
+                  ${formatTime(log.createdAt)} · <strong>${log.operator}</strong> · 
+                  <span class="tag ${getLogTypeTagClass(log.type)}" style="font-size:10px;">${getLogTypeText(log.type)}</span>
+                  ${log.fromStatus && log.toStatus && log.fromStatus !== log.toStatus ? ` · ${getStatusText(log.fromStatus)}→${getStatusText(log.toStatus)}` : ''}
+                </div>
+                <div style="font-size:12px;">${log.remark}</div>
+                ${log.extra?.department ? `<div style="font-size:11px;color:var(--accent-red);margin-top:2px;">📤 ${log.extra.department}</div>` : ''}
+                ${log.extra?.note ? `<div style="font-size:11px;color:var(--accent-blue);margin-top:2px;">💬 ${log.extra.note}</div>` : ''}
+              </div>
+            </div>
+          `).join('');
+
+          const followHtml = followUps.length > 0 ? `
+            <div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);">
+              <div style="font-size:12px;font-weight:600;margin-bottom:8px;">🔗 协同跟进 (${followUps.length})</div>
+              ${followUps.map(fu => `
+                <div style="background:var(--bg-tertiary);border-radius:6px;padding:10px;margin-bottom:6px;">
+                  <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">
+                    <span class="tag tag-blue" style="font-size:10px;">${fu.type === 'progress' ? '📝 跟进进展' : fu.type === 'result' ? '✅ 办结反馈' : '📎 附件'}</span>
+                    <strong style="margin:0 6px;">${fu.title}</strong> · ${fu.operator} · ${formatTime(fu.createdAt)}
+                  </div>
+                  <div style="font-size:12px;">${fu.content || '—'}</div>
+                  ${fu.attachment ? `
+                    <div style="margin-top:6px;">
+                      <a href="${fu.attachment.url}" target="_blank" style="color:var(--accent-blue);text-decoration:none;font-size:11px;">
+                        📎 ${fu.attachment.name}
+                      </a>
+                    </div>
+                  ` : ''}
+                </div>
+              `).join('')}
+            </div>
+          ` : '';
+
+          const judgmentHtml = alert.judgment ? `
+            <div style="background:linear-gradient(135deg, var(--accent-blue)10, var(--accent-purple)10);border-radius:6px;padding:12px;margin-top:12px;border:1px solid var(--accent-blue)20;">
+              <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--accent-blue);">🔍 研判结论</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
+                <div>
+                  <div style="color:var(--text-muted);font-size:11px;">事件性质</div>
+                  <div style="font-weight:500;">${alert.judgment.nature || '—'}</div>
+                </div>
+                <div>
+                  <div style="color:var(--text-muted);font-size:11px;">风险等级</div>
+                  <div style="font-weight:500;">
+                    ${alert.judgment.riskLevel 
+                      ? `<span class="tag ${alert.judgment.riskLevel === '高' ? 'tag-red' : alert.judgment.riskLevel === '中' ? 'tag-orange' : 'tag-green'}" style="font-size:10px;">${alert.judgment.riskLevel}风险</span>` 
+                      : '—'}
+                  </div>
+                </div>
+                <div style="grid-column:span 2;">
+                  <div style="color:var(--text-muted);font-size:11px;">影响范围</div>
+                  <div style="font-weight:500;">${alert.judgment.scope || '—'}</div>
+                </div>
+                <div style="grid-column:span 2;">
+                  <div style="color:var(--text-muted);font-size:11px;">建议口径</div>
+                  <div style="font-weight:500;">${alert.judgment.response || '—'}</div>
+                </div>
+              </div>
+              <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);font-size:11px;color:var(--text-muted);">
+                研判人：${alert.judgment.savedBy} · ${alert.judgment.savedAt}
+              </div>
+            </div>
+          ` : '';
+
+          const attachments = followUps.filter(fu => fu.attachment);
+          const attachHtml = attachments.length > 0 ? `
+            <div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);">
+              <div style="font-size:12px;font-weight:600;margin-bottom:8px;">📎 相关附件 (${attachments.length})</div>
+              ${attachments.map(a => `
+                <div style="padding:4px 0;font-size:12px;">
+                  📎 <a href="${a.attachment.url}" target="_blank" style="color:var(--accent-blue);text-decoration:none;">${a.attachment.name}</a>
+                </div>
+              `).join('')}
+            </div>
+          ` : '';
+
+          return `
+            <div style="background:var(--bg-primary);border:1px solid var(--border);border-radius:8px;padding:20px;margin-bottom:16px;page-break-inside:avoid;">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid var(--border);">
+                <div>
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <span style="font-size:18px;">${levelIcon}</span>
+                    <span class="tag tag-${catInfo.color}" style="font-size:11px;">${catInfo.icon} ${catInfo.name}</span>
+                    <span class="tag ${getStatusTagClass(alert.status)}" style="font-size:11px;">${getStatusText(alert.status)}</span>
+                    <span style="font-size:11px;color:var(--text-muted);">${levelName} / ${alert.matchType}</span>
+                  </div>
+                  <div style="font-size:16px;font-weight:700;">告警 #${String(alert.id).slice(-6)}</div>
+                </div>
+                <div style="text-align:right;font-size:11px;color:var(--text-muted);">
+                  <div>命中词：<span style="font-weight:600;color:var(--accent-red);">${alert.hitWord}</span></div>
+                  <div>生成时间：${formatTime(alert.createdAt)}</div>
+                  <div>来源：${alert.platform} · ${alert.author}</div>
+                </div>
+              </div>
+
+              <div style="background:var(--bg-tertiary);border-radius:6px;padding:12px;margin-bottom:16px;">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">📄 告警内容</div>
+                <div style="font-size:13px;line-height:1.6;">${alert.content}</div>
+                ${alert.context ? `<div style="font-size:12px;color:var(--text-muted);margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);">上下文：${alert.context}</div>` : ''}
+              </div>
+
+              ${alert.reportInfo ? `
+                <div style="background:var(--accent-red)8;border-radius:6px;padding:12px;margin-bottom:16px;border:1px solid var(--accent-red)20;">
+                  <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--accent-red);">📤 上报信息</div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
+                    <div>
+                      <div style="color:var(--text-muted);font-size:11px;">接收部门</div>
+                      <div style="font-weight:600;">${alert.reportInfo.department}</div>
+                    </div>
+                    <div>
+                      <div style="color:var(--text-muted);font-size:11px;">上报时间</div>
+                      <div>${alert.reportInfo.reportedAt}</div>
+                    </div>
+                    <div>
+                      <div style="color:var(--text-muted);font-size:11px;">上报人</div>
+                      <div>${alert.reportInfo.reportedBy}</div>
+                    </div>
+                    <div>
+                      <div style="color:var(--text-muted);font-size:11px;">当前状态</div>
+                      <div>${alert.status === 'done' ? '<span class="tag tag-green" style="font-size:10px;">✅ 已办结</span>' : '<span class="tag tag-orange" style="font-size:10px;">⏳ 待反馈</span>'}</div>
+                    </div>
+                  </div>
+                  ${alert.reportInfo.note ? `
+                    <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--accent-red)30;">
+                      <div style="color:var(--text-muted);font-size:11px;">上报说明</div>
+                      <div>${alert.reportInfo.note}</div>
+                    </div>
+                  ` : ''}
+                </div>
+              ` : ''}
+
+              <div style="margin-bottom:16px;">
+                <div style="font-size:12px;font-weight:600;margin-bottom:10px;">⏱ 处置时间线 (${g.logs.length})</div>
+                ${timelineHtml}
+              </div>
+
+              ${followHtml}
+              ${attachHtml}
+              ${judgmentHtml}
+
+              <div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--border);display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-muted);">
+                <div>📊 传播热度：${alert.heat} · 转发 ${alert.repost} · 评论 ${alert.comment}</div>
+                <button class="btn btn-sm" onclick="goToAlert(${alert.id})">🔗 查看详情</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        const printBtn = cards ? `
+          <div style="text-align:right;margin-bottom:12px;">
+            <button class="btn btn-sm" onclick="window.print()">🖨️ 打印复盘报告</button>
+          </div>
+        ` : '';
+
+        document.getElementById('handoverRecords').innerHTML = printBtn + (cards || '<div style="text-align:center;padding:40px;color:var(--text-muted);">本班次暂无告警处置记录</div>');
       }
     }
 
