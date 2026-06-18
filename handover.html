@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>交接班摘要 - 舆情告警工作台</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="main-container" id="mainContent">
+    <div class="page-header">
+      <div class="page-title-block">
+        <h1>🔄 交接班摘要</h1>
+        <p>汇总本班次高频词、未处理告警和重点账号，帮助下一班快速接手工作</p>
+      </div>
+      <div class="btn-group">
+        <button class="btn" onclick="window.print()">🖨 打印交班表</button>
+        <button class="btn btn-primary" onclick="confirmHandover()">✅ 确认交接班</button>
+      </div>
+    </div>
+
+    <div class="shift-header">
+      <div class="shift-header-row">
+        <div class="shift-info-block">
+          <div>
+            <div class="label">当前班次</div>
+            <div class="value" id="shiftName">—</div>
+          </div>
+          <div>
+            <div class="label">值班时段</div>
+            <div class="value" id="shiftTime">—</div>
+          </div>
+          <div>
+            <div class="label">主班</div>
+            <div class="value" id="shiftOperator">—</div>
+          </div>
+          <div>
+            <div class="label">副班</div>
+            <div class="value" id="shiftAssistant">—</div>
+          </div>
+          <div>
+            <div class="label">交班时间</div>
+            <div class="value" style="color:var(--accent-orange);" id="handoverTime">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats-grid" id="statsGrid"></div>
+
+    <div class="summary-grid">
+      <div class="panel" style="grid-column: span 1;">
+        <div class="panel-header">
+          <div class="panel-title">🔥 本班次高频敏感词 TOP 10</div>
+          <span class="tag tag-yellow">按命中次数排序</span>
+        </div>
+        <div class="panel-body">
+          <div id="topWordsList"></div>
+        </div>
+      </div>
+
+      <div class="panel" style="grid-column: span 1;">
+        <div class="panel-header">
+          <div class="panel-title">📊 告警分类分布</div>
+          <span class="tag tag-blue">按类别统计</span>
+        </div>
+        <div class="panel-body">
+          <div id="categoryProgress"></div>
+        </div>
+      </div>
+
+      <div class="panel" style="grid-column: span 1;">
+        <div class="panel-header">
+          <div class="panel-title">🌐 平台来源分布</div>
+          <span class="tag tag-cyan">TOP 6 平台</span>
+        </div>
+        <div class="panel-body">
+          <div id="platformProgress"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="summary-grid" style="grid-template-columns: 1.3fr 1fr; margin-bottom:20px;">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">⚠️ 未处理 & 待跟进告警</div>
+          <div class="btn-group">
+            <select class="form-select filter-select" id="pendingFilter" onchange="renderPendingAlerts()" style="min-width:140px;">
+              <option value="all">全部未办结</option>
+              <option value="pending">待处理</option>
+              <option value="verifying">待核实</option>
+              <option value="reporting">需上报</option>
+            </select>
+          </div>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style="width:60px;">等级</th>
+                <th>告警内容摘要</th>
+                <th style="width:100px;">平台</th>
+                <th style="width:100px;">命中词</th>
+                <th style="width:80px;">热度</th>
+                <th style="width:80px;">剩余时限</th>
+                <th style="width:90px;">状态</th>
+                <th style="width:90px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="pendingAlertsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">🎯 重点关注账号</div>
+          <span class="tag tag-red">需持续监测</span>
+        </div>
+        <div class="panel-body">
+          <div id="keyAccountsList"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="summary-grid" style="grid-template-columns: 1fr 1fr; margin-bottom:0;">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">📝 本班次重要处置记录</div>
+          <button class="btn btn-sm btn-primary" onclick="addRecord()">＋ 添加记录</button>
+        </div>
+        <div class="panel-body">
+          <div id="handoverRecords"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">📋 下一班次工作要点</div>
+        </div>
+        <div class="panel-body">
+          <div class="form-group">
+            <label class="form-label">需特别关注事项</label>
+            <textarea class="form-textarea" id="nextShiftNotes" placeholder="请填写下一班需要重点关注的事项、正在跟进中的事件等...">1. 继续关注"开发区电子厂罢工"事件的后续发展，该事件真实性正在核实中
+2. 抖音账号"街头拍客"发布的非法集会视频热度较高，需持续监测传播情况
+3. 暴雨导致的洪灾救援相关舆情需保持关注，及时回应群众求助信息
+4. 领导批示的"领导作风"文章已上报，需跟踪上级部门反馈
+5. 夜间重点关注天涯论坛、贴吧等论坛类平台的突发舆情</textarea>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div class="form-group">
+              <label class="form-label">预计交接</label>
+              <input type="text" class="form-input" value="下一班：夜班 00:00-08:00" readonly>
+            </div>
+            <div class="form-group">
+              <label class="form-label">交接人签字</label>
+              <input type="text" class="form-input" id="signInput" placeholder="请输入姓名">
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width:100%;" onclick="saveNotes()">💾 保存工作要点</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    renderTopNav('handover');
+    renderShiftInfo();
+    renderStats();
+    renderTopWords();
+    renderCategoryProgress();
+    renderPlatformProgress();
+    renderPendingAlerts();
+    renderKeyAccounts();
+    renderHandoverRecords();
+
+    function renderShiftInfo() {
+      const shift = getCurrentShift();
+      document.getElementById('shiftName').textContent = shift.name;
+      document.getElementById('shiftTime').textContent = `${shift.startTime} - ${shift.endTime}`;
+      document.getElementById('shiftOperator').textContent = shift.operator;
+      document.getElementById('shiftAssistant').textContent = shift.assistant;
+      const now = new Date();
+      document.getElementById('handoverTime').textContent = 
+        `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    }
+
+    function renderStats() {
+      const stats = getAlertStats();
+      const processed = stats.verifying + stats.reporting + stats.done;
+      const rate = stats.total > 0 ? ((processed / stats.total) * 100).toFixed(0) + '%' : '0%';
+      const urgentPend = alerts.filter(a => (a.status === 'pending' || a.status === 'reporting') && a.level === 'red').length;
+
+      const html = [
+        renderStatCard({ icon: '📊', title: '本班次告警', value: stats.total, trend: `处置率 ${rate}`, color: 'blue' }),
+        renderStatCard({ icon: '✅', title: '已处置', value: processed, trend: `办结 ${stats.done} 件`, color: 'green' }),
+        renderStatCard({ icon: '⚠️', title: '待跟进', value: stats.pending + stats.verifying + stats.reporting, trend: `误报 ${stats.falseAlarm} 条`, color: 'yellow' }),
+        renderStatCard({ icon: '🔴', title: '紧急未处理', value: urgentPend, trend: urgentPend > 0 ? '请优先处置' : '全部已响应', color: 'red' }),
+        renderStatCard({ icon: '📤', title: '上报事项', value: stats.reporting, trend: `${stats.reporting} 件待反馈`, color: 'purple' }),
+        renderStatCard({ icon: '👁️', title: '监测平台', value: Object.keys(PLATFORMS).length, trend: '全网持续扫描', color: 'cyan' })
+      ].join('');
+      document.getElementById('statsGrid').innerHTML = html;
+    }
+
+    function renderTopWords() {
+      const words = getTopWords().slice(0, 10);
+      const maxCount = words[0]?.count || 1;
+
+      const colorMap = {
+        politics: 'var(--accent-red)',
+        stability: 'var(--accent-orange)',
+        disaster: 'var(--accent-yellow)',
+        rumor: 'var(--accent-purple)',
+        vulgar: 'var(--accent-blue)',
+        other: 'var(--accent-cyan)'
+      };
+
+      const html = words.map((w, i) => {
+        const pct = (w.count / maxCount * 100).toFixed(0);
+        const color = colorMap[w.category] || 'var(--accent-blue)';
+        return `
+          <div class="progress-item">
+            <div class="progress-label">
+              <span class="name">
+                <span style="color:var(--text-muted);display:inline-block;width:22px;">${i + 1}.</span>
+                <strong>${w.word}</strong>
+              </span>
+              <span class="num">${w.count} 次</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill" style="width:${pct}%;background:${color};"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      document.getElementById('topWordsList').innerHTML = html;
+    }
+
+    function renderCategoryProgress() {
+      const catStats = getCategoryStats();
+      const max = Math.max(...catStats.map(c => c.count), 1);
+      const colorMap = {
+        red: 'var(--accent-red)',
+        orange: 'var(--accent-orange)',
+        yellow: 'var(--accent-yellow)',
+        purple: 'var(--accent-purple)',
+        blue: 'var(--accent-blue)',
+        gray: 'var(--text-muted)'
+      };
+
+      const html = catStats.map(c => {
+        const pct = (c.count / max * 100).toFixed(0);
+        return `
+          <div class="progress-item">
+            <div class="progress-label">
+              <span class="name">${WORD_CATEGORIES[c.category].icon} ${c.name}</span>
+              <span class="num">${c.count} 条</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill" style="width:${pct}%;background:${colorMap[c.color]};"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      document.getElementById('categoryProgress').innerHTML = html;
+    }
+
+    function renderPlatformProgress() {
+      const pStats = getPlatformStats().slice(0, 6);
+      const max = Math.max(...pStats.map(p => p.count), 1);
+
+      const html = pStats.map(p => {
+        const pct = (p.count / max * 100).toFixed(0);
+        const info = PLATFORMS[p.platform];
+        const colorMap = {
+          red: 'var(--accent-red)',
+          green: 'var(--accent-green)',
+          blue: 'var(--accent-blue)',
+          cyan: 'var(--accent-cyan)',
+          orange: 'var(--accent-orange)',
+          pink: 'var(--accent-purple)',
+          gray: 'var(--text-muted)'
+        };
+        return `
+          <div class="progress-item">
+            <div class="progress-label">
+              <span class="name">${info.icon} ${info.name}</span>
+              <span class="num">${p.count} 条</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill" style="width:${pct}%;background:${colorMap[info.color] || 'var(--accent-blue)'};"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      document.getElementById('platformProgress').innerHTML = html;
+    }
+
+    function renderPendingAlerts() {
+      const filter = document.getElementById('pendingFilter').value;
+      let pending = alerts.filter(a => a.status !== 'done' && a.status !== 'false_alarm');
+      if (filter !== 'all') {
+        pending = pending.filter(a => a.status === filter);
+      }
+      pending.sort((a, b) => {
+        const levelOrder = { red: 0, orange: 1, yellow: 2, blue: 3 };
+        if (levelOrder[a.level] !== levelOrder[b.level]) return levelOrder[a.level] - levelOrder[b.level];
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      });
+
+      if (pending.length === 0) {
+        document.getElementById('pendingAlertsBody').innerHTML = `
+          <tr><td colspan="8">
+            <div class="empty-state">
+              <div class="empty-state-icon">🎊</div>
+              <div class="empty-state-text">本类别暂无待跟进告警</div>
+            </div>
+          </td></tr>
+        `;
+        return;
+      }
+
+      const html = pending.slice(0, 12).map(a => {
+        const pInfo = PLATFORMS[a.platform];
+        const shortContent = a.content.length > 50 ? a.content.slice(0, 50) + '...' : a.content;
+        const levelIcon = a.level === 'red' ? '🔴' : a.level === 'orange' ? '🟠' : a.level === 'yellow' ? '🟡' : '🔵';
+        const deadlineColor = a.deadline <= 30 ? 'color:var(--accent-red);font-weight:600;' : '';
+
+        return `
+          <tr>
+            <td style="text-align:center;font-size:18px;">${levelIcon}</td>
+            <td style="font-size:13px;">${shortContent}</td>
+            <td><span class="tag tag-gray">${pInfo.icon} ${pInfo.name}</span></td>
+            <td><span class="tag tag-red">${a.hitWord}</span></td>
+            <td style="color:${getHeatColor(a.heat)};font-weight:600;">🔥 ${a.heat}</td>
+            <td style="${deadlineColor}">⏱ ${a.deadline}分</td>
+            <td><span class="tag ${getStatusTagClass(a.status)}">${getStatusText(a.status)}</span></td>
+            <td>
+              <button class="btn btn-sm btn-primary" onclick="goToAlert(${a.id})">处理 →</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+      document.getElementById('pendingAlertsBody').innerHTML = html;
+    }
+
+    function renderKeyAccounts() {
+      const html = keyAccounts.map(acc => {
+        const pInfo = PLATFORMS[acc.platform];
+        const riskMap = { high: 'tag-red', medium: 'tag-orange', low: 'tag-blue' };
+        const riskText = { high: '高风险', medium: '中风险', low: '低风险' };
+        const avatarColor = { high: 'var(--accent-red)', medium: 'var(--accent-orange)', low: 'var(--accent-blue)' }[acc.riskLevel];
+
+        return `
+          <div class="account-card">
+            <div class="account-avatar" style="background:${avatarColor}20;color:${avatarColor};">${acc.avatar}</div>
+            <div class="account-info">
+              <div class="account-name">
+                ${acc.name}
+                <span class="tag ${riskMap[acc.riskLevel]}">${riskText[acc.riskLevel]}</span>
+              </div>
+              <div class="account-platform">${pInfo.icon} ${pInfo.name} · 活跃 ${acc.lastActive}</div>
+              <div class="account-stats">
+                <span>👥 ${formatNumber(acc.fans)}</span>
+                <span>🚨 ${acc.alertCount} 次告警</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      document.getElementById('keyAccountsList').innerHTML = html;
+    }
+
+    let records = [
+      { time: '10:32', operator: '张伟', content: '接到"抖音非法集会视频"告警，已联系属地派出所核实，正在等待回复。', level: 'red' },
+      { time: '11:15', operator: '李娜', content: '处置"领导作风"公众号文章，研判后上报市委宣传部舆情处。', level: 'orange' },
+      { time: '13:48', operator: '张伟', content: '新华网评论区"打砸抢烧"不实信息，已联系平台删除并辟谣，标记为误报。', level: 'yellow' },
+      { time: '14:20', operator: '李娜', content: '快手洪灾求助视频，已转应急管理局，对方表示救援力量已到位。', level: 'orange' }
+    ];
+
+    function renderHandoverRecords() {
+      if (records.length === 0) {
+        document.getElementById('handoverRecords').innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">📝</div>
+            <div class="empty-state-text">暂无处置记录，点击上方按钮添加</div>
+          </div>
+        `;
+        return;
+      }
+
+      const levelStyle = {
+        red: 'border-left:3px solid var(--accent-red);',
+        orange: 'border-left:3px solid var(--accent-orange);',
+        yellow: 'border-left:3px solid var(--accent-yellow);',
+        blue: 'border-left:3px solid var(--accent-blue);'
+      };
+
+      const html = records.map(r => `
+        <div style="padding:12px 16px;background:var(--bg-tertiary);border-radius:6px;margin-bottom:10px;${levelStyle[r.level]}">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <div style="font-size:13px;font-weight:600;">
+              <span style="color:var(--accent-cyan);font-family:Consolas;">[${r.time}]</span>
+              ${r.operator}
+            </div>
+            <span class="tag tag-${r.level === 'red' ? 'red' : r.level === 'orange' ? 'orange' : 'yellow'}">
+              ${r.level === 'red' ? '重要' : r.level === 'orange' ? '关注' : '常规'}
+            </span>
+          </div>
+          <div style="font-size:13px;color:var(--text-secondary);line-height:1.6;">${r.content}</div>
+        </div>
+      `).join('');
+      document.getElementById('handoverRecords').innerHTML = html;
+    }
+
+    function addRecord() {
+      const formHTML = `
+        <div class="form-group">
+          <label class="form-label">重要程度</label>
+          <select class="form-select" id="r-level">
+            <option value="red">🔴 重要</option>
+            <option value="orange">🟠 关注</option>
+            <option value="yellow">🟡 常规</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">记录内容 *</label>
+          <textarea class="form-textarea" id="r-content" placeholder="描述处置过程、联系的部门、事件进展等..."></textarea>
+        </div>
+      `;
+      showModal('添加处置记录', formHTML, (overlay) => {
+        const content = overlay.querySelector('#r-content').value.trim();
+        if (!content) { showNotification('请填写记录内容', '', 'warning'); return false; }
+        const level = overlay.querySelector('#r-level').value;
+        const now = new Date();
+        records.unshift({
+          time: `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
+          operator: getCurrentShift().operator,
+          content,
+          level
+        });
+        renderHandoverRecords();
+        showNotification('记录已添加', '', 'success');
+      });
+    }
+
+    function goToAlert(id) {
+      window.location.href = `alerts.html?highlight=${id}`;
+    }
+
+    function saveNotes() {
+      const notes = document.getElementById('nextShiftNotes').value;
+      const sign = document.getElementById('signInput').value;
+      if (!sign) { showNotification('请签字确认', '输入交接人姓名后保存', 'warning'); return; }
+      showNotification('保存成功', `交班记录已存档（签字：${sign}）`, 'success');
+    }
+
+    function confirmHandover() {
+      const sign = document.getElementById('signInput').value;
+      showModal('确认交接班', `
+        <div style="padding:12px 0;">
+          <p style="margin-bottom:16px;">确认将工作交接给下一班次人员吗？</p>
+          <div style="background:var(--bg-tertiary);padding:14px;border-radius:8px;">
+            <div style="margin-bottom:8px;"><strong>交班人：</strong>${getCurrentShift().operator}${sign ? `（${sign}）` : ''}</div>
+            <div style="margin-bottom:8px;"><strong>待跟进告警：</strong><span style="color:var(--accent-orange);font-weight:600;">${alerts.filter(a => a.status !== 'done' && a.status !== 'false_alarm').length} 条</span></div>
+            <div style="margin-bottom:8px;"><strong>重要处置记录：</strong>${records.length} 条</div>
+            <div><strong>工作要点：</strong>已填写</div>
+          </div>
+        </div>
+      `, () => {
+        showNotification('✅ 交接班完成', '工作已顺利交接给下一班', 'success');
+      });
+    }
+  </script>
+</body>
+</html>

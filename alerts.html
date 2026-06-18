@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>实时告警列表 - 舆情告警工作台</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="main-container" id="mainContent">
+    <div class="page-header">
+      <div class="page-title-block">
+        <h1>🚨 实时告警</h1>
+        <p>敏感词命中内容按时间滚动展示，点击卡片查看详情并标记处置状态</p>
+      </div>
+      <div class="btn-group">
+        <button class="btn" id="pauseBtn" onclick="togglePause()">⏸ 暂停刷新</button>
+        <button class="btn btn-primary" onclick="markAllRead()">📌 全部标为已读</button>
+      </div>
+    </div>
+
+    <div class="stats-grid" id="statsGrid"></div>
+
+    <div class="two-column">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            告警列表
+            <span id="liveBadge" style="display:inline-flex;align-items:center;gap:6px;margin-left:8px;">
+              <span class="alert-pulse"></span>
+              <span style="font-size:12px;color:var(--accent-red);font-weight:500;">LIVE</span>
+            </span>
+          </div>
+          <div class="filter-bar" style="margin-bottom:0;">
+            <div class="search-box">
+              <input type="text" id="searchInput" placeholder="搜索关键词、作者、来源...">
+            </div>
+            <select class="form-select filter-select" id="platformFilter" onchange="renderAlertList()">
+              <option value="">全部平台</option>
+            </select>
+            <select class="form-select filter-select" id="categoryFilter" onchange="renderAlertList()">
+              <option value="">全部类别</option>
+            </select>
+            <select class="form-select filter-select" id="levelFilter" onchange="renderAlertList()">
+              <option value="">全部等级</option>
+              <option value="red">🔴 一级</option>
+              <option value="orange">🟠 二级</option>
+              <option value="yellow">🟡 三级</option>
+              <option value="blue">🔵 四级</option>
+            </select>
+            <select class="form-select filter-select" id="statusFilter" onchange="renderAlertList()">
+              <option value="">全部状态</option>
+              <option value="pending">待处理</option>
+              <option value="verifying">待核实</option>
+              <option value="reporting">需上报</option>
+              <option value="false_alarm">误报</option>
+              <option value="done">已办结</option>
+            </select>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="alert-list" id="alertList"></div>
+        </div>
+      </div>
+
+      <div class="detail-panel" id="detailPanel">
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">告警详情</div>
+            <div id="detailStatusTag"></div>
+          </div>
+          <div class="panel-body" id="detailBody">
+            <div class="empty-state" style="padding:60px 20px;">
+              <div class="empty-state-icon">👆</div>
+              <div class="empty-state-text">请在左侧选择一条告警查看详情</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    let selectedAlertId = null;
+    let isPaused = false;
+    let readAlertIds = new Set();
+
+    renderTopNav('alerts');
+    initFilters();
+    renderStats();
+    renderAlertList();
+
+    startSimulatedAlerts((newAlert) => {
+      if (!isPaused) {
+        renderStats();
+        renderAlertList();
+        showNotification('新告警', `【${PLATFORMS[newAlert.platform].name}】${newAlert.hitWord} - ${newAlert.author}`);
+      }
+    });
+
+    setInterval(() => {
+      if (!isPaused) renderAlertList();
+    }, 30000);
+
+    document.getElementById('searchInput').addEventListener('input', renderAlertList);
+
+    function initFilters() {
+      const pSelect = document.getElementById('platformFilter');
+      Object.entries(PLATFORMS).forEach(([k, v]) => {
+        pSelect.innerHTML += `<option value="${k}">${v.icon} ${v.name}</option>`;
+      });
+      const cSelect = document.getElementById('categoryFilter');
+      Object.entries(WORD_CATEGORIES).forEach(([k, v]) => {
+        cSelect.innerHTML += `<option value="${k}">${v.icon} ${v.name}</option>`;
+      });
+    }
+
+    function togglePause() {
+      isPaused = !isPaused;
+      const btn = document.getElementById('pauseBtn');
+      const badge = document.getElementById('liveBadge');
+      if (isPaused) {
+        btn.innerHTML = '▶ 恢复刷新';
+        badge.style.display = 'none';
+        showNotification('已暂停', '告警刷新已暂停', 'warning');
+      } else {
+        btn.innerHTML = '⏸ 暂停刷新';
+        badge.style.display = 'inline-flex';
+        showNotification('已恢复', '告警实时刷新已恢复', 'success');
+      }
+    }
+
+    function renderStats() {
+      const stats = getAlertStats();
+      const avgResponse = '12.5分';
+      const falseAlarmRate = stats.total > 0 ? ((stats.falseAlarm / stats.total) * 100).toFixed(1) + '%' : '0%';
+
+      const html = [
+        renderStatCard({ icon: '📊', title: '今日告警总数', value: stats.total, trend: '较昨日 +14.3%', color: 'blue' }),
+        renderStatCard({ icon: '⏳', title: '待处理', value: stats.pending, trend: '需立即处置', color: 'yellow' }),
+        renderStatCard({ icon: '🔍', title: '待核实', value: stats.verifying, color: 'cyan' }),
+        renderStatCard({ icon: '📤', title: '已上报', value: stats.reporting, trend: '2项待反馈', color: 'purple' }),
+        renderStatCard({ icon: '🔴', title: '一级告警', value: stats.highLevel, trend: `平均响应 ${avgResponse}`, color: 'red' }),
+        renderStatCard({ icon: '✅', title: '误报率', value: falseAlarmRate, trend: `误报 ${stats.falseAlarm} 条`, color: 'green' })
+      ].join('');
+      document.getElementById('statsGrid').innerHTML = html;
+    }
+
+    function renderAlertList() {
+      const search = document.getElementById('searchInput').value.toLowerCase();
+      const platform = document.getElementById('platformFilter').value;
+      const category = document.getElementById('categoryFilter').value;
+      const level = document.getElementById('levelFilter').value;
+      const status = document.getElementById('statusFilter').value;
+
+      let filtered = alerts.filter(a => {
+        if (search && !(a.content.toLowerCase().includes(search) || a.author.toLowerCase().includes(search) || a.hitWord.toLowerCase().includes(search))) return false;
+        if (platform && a.platform !== platform) return false;
+        if (category && a.category !== category) return false;
+        if (level && a.level !== level) return false;
+        if (status && a.status !== status) return false;
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        document.getElementById('alertList').innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">🎉</div>
+            <div class="empty-state-text">暂无匹配的告警</div>
+          </div>
+        `;
+        return;
+      }
+
+      const html = filtered.map(a => {
+        const platformInfo = PLATFORMS[a.platform];
+        const isRead = readAlertIds.has(a.id);
+        const isSelected = selectedAlertId === a.id;
+        const contentHighlighted = a.content.replace(a.hitWord, `<span class="hit-word">${a.hitWord}</span>`);
+        const heatColor = getHeatColor(a.heat);
+
+        return `
+          <div class="alert-card level-${a.level} ${isRead ? 'read' : ''}" 
+               style="${isSelected ? 'background:var(--bg-hover);border-color:var(--accent-blue);' : ''}"
+               onclick="selectAlert(${a.id})">
+            <div class="alert-header">
+              <div class="alert-source">
+                <span class="alert-platform">${platformInfo.icon} ${platformInfo.name}</span>
+                <span class="tag tag-${WORD_CATEGORIES[a.category].color}">${WORD_CATEGORIES[a.category].icon} ${WORD_CATEGORIES[a.category].name}</span>
+                <span class="tag ${getStatusTagClass(a.status)}">${getStatusText(a.status)}</span>
+                ${!isRead ? '<span class="alert-pulse"></span>' : ''}
+              </div>
+              <span class="alert-time">${formatTime(a.createdAt)}</span>
+            </div>
+            <div class="alert-content">${contentHighlighted}</div>
+            <div class="alert-footer">
+              <div class="alert-meta">
+                <span class="alert-meta-item">👤 ${a.author}</span>
+                <span class="alert-meta-item">
+                  🔥 ${a.heat}
+                  <div class="alert-heat-bar"><div class="alert-heat-fill" style="width:${a.heat}%;background:${heatColor};"></div></div>
+                </span>
+                <span class="alert-meta-item">🔁 ${formatNumber(a.repost)}</span>
+                <span class="alert-meta-item">💬 ${formatNumber(a.comment)}</span>
+                <span class="alert-meta-item" style="color:${a.deadline <= 30 ? 'var(--accent-red)' : 'var(--text-secondary)'};">⏱ ${a.deadline}分钟</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      document.getElementById('alertList').innerHTML = html;
+    }
+
+    function selectAlert(id) {
+      selectedAlertId = id;
+      readAlertIds.add(id);
+      const a = alerts.find(x => x.id === id);
+      if (!a) return;
+      renderAlertList();
+      renderDetail(a);
+    }
+
+    function renderDetail(a) {
+      const platformInfo = PLATFORMS[a.platform];
+      const catInfo = WORD_CATEGORIES[a.category];
+      const contentHighlighted = a.content.replace(a.hitWord, `<span class="hit-word">${a.hitWord}</span>`);
+      const heatColor = getHeatColor(a.heat);
+
+      const levelText = a.level === 'red' ? '🔴 一级（立即处置）' : a.level === 'orange' ? '🟠 二级（紧急）' : a.level === 'yellow' ? '🟡 三级（关注）' : '🔵 四级（常规）';
+
+      const html = `
+        <div class="detail-section">
+          <div class="detail-section-title">基本信息</div>
+          <div class="detail-info-grid">
+            <div class="detail-info-label">告警ID</div>
+            <div class="detail-info-value">#${String(a.id).slice(-6)}</div>
+            <div class="detail-info-label">来源平台</div>
+            <div class="detail-info-value">${platformInfo.icon} ${platformInfo.name}</div>
+            <div class="detail-info-label">命中类别</div>
+            <div class="detail-info-value"><span class="tag tag-${catInfo.color}">${catInfo.icon} ${catInfo.name}</span></div>
+            <div class="detail-info-label">命中词</div>
+            <div class="detail-info-value" style="color:var(--accent-red);font-weight:600;">${a.hitWord}</div>
+            <div class="detail-info-label">匹配方式</div>
+            <div class="detail-info-value">${a.matchType}</div>
+            <div class="detail-info-label">告警等级</div>
+            <div class="detail-info-value">${levelText}</div>
+            <div class="detail-info-label">响应时限</div>
+            <div class="detail-info-value" style="color:${a.deadline <= 30 ? 'var(--accent-red)' : 'var(--text-primary)'};">⏱ ${a.deadline} 分钟内</div>
+            <div class="detail-info-label">发现时间</div>
+            <div class="detail-info-value">${formatFullTime(a.createdAt)}</div>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">内容原文</div>
+          <div class="detail-text">${contentHighlighted}</div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">上下文分析</div>
+          <div class="detail-text" style="background:var(--bg-tertiary);">${a.context}</div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">传播数据</div>
+          <div class="detail-info-grid">
+            <div class="detail-info-label">作者账号</div>
+            <div class="detail-info-value">${a.author}（粉丝 ${formatNumber(a.authorFans)}）</div>
+            <div class="detail-info-label">传播热度</div>
+            <div class="detail-info-value" style="color:${heatColor};font-weight:600;">🔥 ${a.heat} / 100</div>
+            <div class="detail-info-label">转发数</div>
+            <div class="detail-info-value">${formatNumber(a.repost)}</div>
+            <div class="detail-info-label">评论数</div>
+            <div class="detail-info-value">${formatNumber(a.comment)}</div>
+            <div class="detail-info-label">点赞数</div>
+            <div class="detail-info-value">${formatNumber(a.like)}</div>
+            <div class="detail-info-label">原文链接</div>
+            <div class="detail-info-value"><a href="${a.url}" target="_blank" style="color:var(--accent-blue);">🔗 查看原文</a></div>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">处置操作</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <button class="btn btn-success" onclick="updateStatus(${a.id}, 'false_alarm')">🚫 标记误报</button>
+            <button class="btn btn-warning" onclick="updateStatus(${a.id}, 'verifying')">🔍 待核实</button>
+            <button class="btn btn-danger" onclick="updateStatus(${a.id}, 'reporting')">📤 需上报</button>
+            <button class="btn btn-primary" onclick="updateStatus(${a.id}, 'done')">✅ 已办结</button>
+          </div>
+          <div style="margin-top:12px;">
+            <label class="form-label">处置备注</label>
+            <textarea class="form-textarea" placeholder="记录处置过程、联系的相关部门等信息..."></textarea>
+          </div>
+        </div>
+      `;
+      document.getElementById('detailBody').innerHTML = html;
+      document.getElementById('detailStatusTag').innerHTML = `<span class="tag ${getStatusTagClass(a.status)}">${getStatusText(a.status)}</span>`;
+    }
+
+    function updateStatus(id, status) {
+      const a = alerts.find(x => x.id === id);
+      if (!a) return;
+      a.status = status;
+      renderStats();
+      renderAlertList();
+      renderDetail(a);
+      showNotification('状态已更新', `告警已标记为「${getStatusText(status)}」`, 'success');
+    }
+
+    function markAllRead() {
+      alerts.forEach(a => readAlertIds.add(a.id));
+      renderAlertList();
+      showNotification('操作成功', '所有告警已标记为已读', 'success');
+    }
+  </script>
+</body>
+</html>

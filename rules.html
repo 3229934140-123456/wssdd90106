@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>敏感词规则管理 - 舆情告警工作台</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="main-container" id="mainContent">
+    <div class="page-header">
+      <div class="page-title-block">
+        <h1>📋 敏感词规则管理</h1>
+        <p>维护敏感词库，设置匹配方式和处置等级，规则生效后将用于全网内容扫描</p>
+      </div>
+      <div class="btn-group">
+        <button class="btn" onclick="exportRules()">⬇ 导出规则</button>
+        <button class="btn btn-primary" onclick="openAddModal()">＋ 新增敏感词</button>
+      </div>
+    </div>
+
+    <div class="stats-grid" id="statsGrid"></div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <div class="category-tabs" id="categoryTabs"></div>
+        <div class="filter-bar" style="margin-bottom:0;">
+          <div class="search-box">
+            <input type="text" id="searchInput" placeholder="搜索敏感词、备注或创建人...">
+          </div>
+          <select class="form-select filter-select" id="matchTypeFilter" onchange="renderRulesTable()">
+            <option value="">全部匹配方式</option>
+            <option value="exact">精确命中</option>
+            <option value="fuzzy">近似命中</option>
+          </select>
+          <select class="form-select filter-select" id="levelFilter" onchange="renderRulesTable()">
+            <option value="">全部处置等级</option>
+            <option value="一级">一级（红色）</option>
+            <option value="二级">二级（橙色）</option>
+            <option value="三级">三级（黄色）</option>
+            <option value="四级">四级（蓝色）</option>
+          </select>
+          <select class="form-select filter-select" id="statusFilter" onchange="renderRulesTable()">
+            <option value="">全部状态</option>
+            <option value="enabled">已启用</option>
+            <option value="disabled">已停用</option>
+          </select>
+        </div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:80px;">状态</th>
+              <th>敏感词</th>
+              <th style="width:100px;">所属类别</th>
+              <th style="width:100px;">匹配方式</th>
+              <th style="width:100px;">处置等级</th>
+              <th style="width:100px;">命中次数</th>
+              <th>备注说明</th>
+              <th style="width:110px;">创建人/时间</th>
+              <th style="width:140px;">操作</th>
+            </tr>
+          </thead>
+          <tbody id="rulesTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    let currentCategory = 'all';
+    let editingRuleId = null;
+
+    renderTopNav('rules');
+    renderStats();
+    renderCategoryTabs();
+    renderRulesTable();
+
+    document.getElementById('searchInput').addEventListener('input', renderRulesTable);
+
+    function renderStats() {
+      const total = sensitiveWords.length;
+      const enabled = sensitiveWords.filter(w => w.enabled).length;
+      const disabled = total - enabled;
+      const totalHits = sensitiveWords.reduce((s, w) => s + w.hitCount, 0);
+      const level1 = sensitiveWords.filter(w => w.level === '一级').length;
+      const level2 = sensitiveWords.filter(w => w.level === '二级').length;
+
+      const html = [
+        renderStatCard({ icon: '📝', title: '规则总数', value: total, trend: '较昨日 +3', color: 'blue' }),
+        renderStatCard({ icon: '✅', title: '已启用', value: enabled, trend: `启用率 ${(enabled/total*100).toFixed(0)}%`, color: 'green' }),
+        renderStatCard({ icon: '⏸️', title: '已停用', value: disabled, color: 'purple' }),
+        renderStatCard({ icon: '🎯', title: '总命中次数', value: totalHits.toLocaleString(), trend: '今日 +186', color: 'cyan' }),
+        renderStatCard({ icon: '🔴', title: '一级规则', value: level1, color: 'red' }),
+        renderStatCard({ icon: '🟠', title: '二级规则', value: level2, color: 'orange' })
+      ].join('');
+      document.getElementById('statsGrid').innerHTML = html;
+    }
+
+    function renderCategoryTabs() {
+      const tabs = [{ key: 'all', name: '全部', icon: '📂', count: sensitiveWords.length }];
+      Object.entries(WORD_CATEGORIES).forEach(([key, info]) => {
+        const count = sensitiveWords.filter(w => w.category === key).length;
+        tabs.push({ key, name: info.name, icon: info.icon, count });
+      });
+
+      const html = tabs.map(t => `
+        <div class="category-tab ${currentCategory === t.key ? 'active' : ''}" onclick="setCategory('${t.key}')">
+          <span>${t.icon}</span> ${t.name} <span class="count">${t.count}</span>
+        </div>
+      `).join('');
+      document.getElementById('categoryTabs').innerHTML = html;
+    }
+
+    function setCategory(key) {
+      currentCategory = key;
+      renderCategoryTabs();
+      renderRulesTable();
+    }
+
+    function renderRulesTable() {
+      const search = document.getElementById('searchInput').value.toLowerCase();
+      const matchType = document.getElementById('matchTypeFilter').value;
+      const level = document.getElementById('levelFilter').value;
+      const status = document.getElementById('statusFilter').value;
+
+      let filtered = sensitiveWords.filter(w => {
+        if (currentCategory !== 'all' && w.category !== currentCategory) return false;
+        if (search && !(w.word.toLowerCase().includes(search) || w.remark.toLowerCase().includes(search) || w.creator.toLowerCase().includes(search))) return false;
+        if (matchType && w.matchType !== matchType) return false;
+        if (level && w.level !== level) return false;
+        if (status === 'enabled' && !w.enabled) return false;
+        if (status === 'disabled' && w.enabled) return false;
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        document.getElementById('rulesTableBody').innerHTML = `
+          <tr><td colspan="9">
+            <div class="empty-state">
+              <div class="empty-state-icon">📭</div>
+              <div class="empty-state-text">暂无匹配的规则，试试调整筛选条件</div>
+            </div>
+          </td></tr>
+        `;
+        return;
+      }
+
+      const html = filtered.map(w => {
+        const catInfo = WORD_CATEGORIES[w.category];
+        const levelClass = w.level === '一级' ? 'tag-red' : w.level === '二级' ? 'tag-orange' : w.level === '三级' ? 'tag-yellow' : 'tag-blue';
+        const matchClass = w.matchType === 'exact' ? 'tag-purple' : 'tag-cyan';
+        const catClass = 'tag-' + catInfo.color;
+
+        return `
+          <tr>
+            <td>
+              <label class="switch">
+                <input type="checkbox" ${w.enabled ? 'checked' : ''} onchange="toggleEnabled(${w.id})">
+                <span class="switch-slider"></span>
+              </label>
+            </td>
+            <td><strong style="font-size:14px;">${w.word}</strong></td>
+            <td><span class="tag ${catClass}">${catInfo.icon} ${catInfo.name}</span></td>
+            <td><span class="tag ${matchClass}">${w.matchType === 'exact' ? '🎯 精确命中' : '🔍 近似命中'}</span></td>
+            <td><span class="tag ${levelClass}">${w.level}</span></td>
+            <td><strong style="color:var(--accent-cyan);">${w.hitCount.toLocaleString()}</strong></td>
+            <td style="color:var(--text-secondary);">${w.remark || '—'}</td>
+            <td style="font-size:12px;color:var(--text-muted);">${w.creator}<br>${w.createdAt}</td>
+            <td>
+              <button class="btn btn-sm btn-ghost" onclick="openEditModal(${w.id})" title="编辑">✏️</button>
+              <button class="btn btn-sm btn-ghost" onclick="duplicateRule(${w.id})" title="复制">📋</button>
+              <button class="btn btn-sm btn-ghost" style="color:var(--accent-red);" onclick="deleteRule(${w.id})" title="删除">🗑️</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+      document.getElementById('rulesTableBody').innerHTML = html;
+    }
+
+    function toggleEnabled(id) {
+      const word = sensitiveWords.find(w => w.id === id);
+      if (word) {
+        word.enabled = !word.enabled;
+        renderStats();
+        renderCategoryTabs();
+        showNotification('操作成功', `敏感词"${word.word}"已${word.enabled ? '启用' : '停用'}`, 'success');
+      }
+    }
+
+    function openAddModal() {
+      editingRuleId = null;
+      showRuleForm();
+    }
+
+    function openEditModal(id) {
+      editingRuleId = id;
+      showRuleForm(sensitiveWords.find(w => w.id === id));
+    }
+
+    function showRuleForm(word) {
+      const isEdit = !!word;
+      const formHTML = `
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">敏感词 *</label>
+            <input type="text" class="form-input" id="f-word" value="${word?.word || ''}" placeholder="请输入敏感词">
+          </div>
+          <div class="form-group">
+            <label class="form-label">所属类别 *</label>
+            <select class="form-select" id="f-category">
+              ${Object.entries(WORD_CATEGORIES).map(([k, i]) => `
+                <option value="${k}" ${word?.category === k ? 'selected' : ''}>${i.icon} ${i.name}</option>
+              `).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">匹配方式 *</label>
+            <select class="form-select" id="f-matchType">
+              <option value="exact" ${word?.matchType === 'exact' ? 'selected' : ''}>🎯 精确命中</option>
+              <option value="fuzzy" ${word?.matchType === 'fuzzy' ? 'selected' : ''}>🔍 近似命中（含变体、近义）</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">处置等级 *</label>
+            <select class="form-select" id="f-level">
+              <option value="一级" ${word?.level === '一级' ? 'selected' : ''}>🔴 一级 - 立即上报处置</option>
+              <option value="二级" ${word?.level === '二级' ? 'selected' : ''}>🟠 二级 - 30分钟内响应</option>
+              <option value="三级" ${word?.level === '三级' ? 'selected' : ''}>🟡 三级 - 1小时内核实</option>
+              <option value="四级" ${word?.level === '四级' ? 'selected' : ''}>🔵 四级 - 关注即可</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">备注说明</label>
+          <textarea class="form-textarea" id="f-remark" placeholder="请输入该敏感词的使用场景、处置建议等说明信息">${word?.remark || ''}</textarea>
+        </div>
+      `;
+
+      showModal(isEdit ? '编辑敏感词' : '新增敏感词', formHTML, (overlay) => {
+        const w = overlay.querySelector('#f-word').value.trim();
+        if (!w) { showNotification('验证失败', '请输入敏感词', 'warning'); return false; }
+
+        const cat = overlay.querySelector('#f-category').value;
+        const matchType = overlay.querySelector('#f-matchType').value;
+        const level = overlay.querySelector('#f-level').value;
+        const remark = overlay.querySelector('#f-remark').value.trim();
+
+        if (isEdit) {
+          Object.assign(word, { word: w, category: cat, matchType, level, remark });
+          showNotification('修改成功', `敏感词"${w}"已更新`, 'success');
+        } else {
+          const newWord = {
+            id: Date.now(),
+            word: w,
+            category: cat,
+            matchType,
+            level,
+            remark,
+            enabled: true,
+            hitCount: 0,
+            creator: getCurrentShift().operator,
+            createdAt: new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/\//g, '-')
+          };
+          sensitiveWords.unshift(newWord);
+          showNotification('新增成功', `敏感词"${w}"已加入规则库`, 'success');
+        }
+        renderStats();
+        renderCategoryTabs();
+        renderRulesTable();
+      });
+    }
+
+    function duplicateRule(id) {
+      const word = sensitiveWords.find(w => w.id === id);
+      if (word) {
+        const newWord = { ...word, id: Date.now(), word: word.word + ' (副本)', hitCount: 0, creator: getCurrentShift().operator, createdAt: new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/\//g, '-') };
+        sensitiveWords.unshift(newWord);
+        renderStats();
+        renderCategoryTabs();
+        renderRulesTable();
+        showNotification('复制成功', `已复制敏感词"${word.word}"`, 'success');
+      }
+    }
+
+    function deleteRule(id) {
+      const word = sensitiveWords.find(w => w.id === id);
+      if (!word) return;
+      showModal('确认删除', `
+        <p style="padding:12px 0;">确定要删除敏感词<strong style="color:var(--accent-red);">「${word.word}」</strong>吗？</p>
+        <p style="font-size:12px;color:var(--text-muted);">删除后该规则将不再生效，此操作不可撤销。</p>
+      `, () => {
+        sensitiveWords = sensitiveWords.filter(w => w.id !== id);
+        renderStats();
+        renderCategoryTabs();
+        renderRulesTable();
+        showNotification('删除成功', `敏感词"${word.word}"已删除`, 'success');
+      });
+    }
+
+    function exportRules() {
+      showNotification('导出成功', `已导出 ${sensitiveWords.length} 条规则`, 'success');
+    }
+  </script>
+</body>
+</html>
