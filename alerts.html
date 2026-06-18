@@ -85,12 +85,29 @@
   <script>
     let selectedAlertId = null;
     let isPaused = false;
-    let readAlertIds = new Set();
+    let readIds = ReadAlerts.get();
 
     renderTopNav('alerts');
     initFilters();
     renderStats();
     renderAlertList();
+
+    // 检查 URL 参数
+    const urlParams = new URLSearchParams(window.location.search);
+    const highlightId = urlParams.get('highlight');
+    if (highlightId) {
+      const numId = parseInt(highlightId);
+      if (AlertAPI.getById(numId)) {
+        selectedAlertId = numId;
+        ReadAlerts.add(numId);
+        readIds = ReadAlerts.get();
+      }
+    }
+    if (selectedAlertId) {
+      renderAlertList();
+      const a = AlertAPI.getById(selectedAlertId);
+      if (a) renderDetail(a);
+    }
 
     startSimulatedAlerts((newAlert) => {
       if (!isPaused) {
@@ -133,17 +150,18 @@
     }
 
     function renderStats() {
-      const stats = getAlertStats();
+      const s = AlertAPI.getStats();
+      const processed = s.verifying + s.reporting + s.done;
       const avgResponse = '12.5分';
-      const falseAlarmRate = stats.total > 0 ? ((stats.falseAlarm / stats.total) * 100).toFixed(1) + '%' : '0%';
+      const urgentPend = AlertAPI.getAll().filter(a => (a.status === 'pending' || a.status === 'reporting') && a.level === 'red').length;
 
       const html = [
-        renderStatCard({ icon: '📊', title: '今日告警总数', value: stats.total, trend: '较昨日 +14.3%', color: 'blue' }),
-        renderStatCard({ icon: '⏳', title: '待处理', value: stats.pending, trend: '需立即处置', color: 'yellow' }),
-        renderStatCard({ icon: '🔍', title: '待核实', value: stats.verifying, color: 'cyan' }),
-        renderStatCard({ icon: '📤', title: '已上报', value: stats.reporting, trend: '2项待反馈', color: 'purple' }),
-        renderStatCard({ icon: '🔴', title: '一级告警', value: stats.highLevel, trend: `平均响应 ${avgResponse}`, color: 'red' }),
-        renderStatCard({ icon: '✅', title: '误报率', value: falseAlarmRate, trend: `误报 ${stats.falseAlarm} 条`, color: 'green' })
+        renderStatCard({ icon: '📊', title: '今日告警总数', value: s.total, trend: '较昨日 +14.3%', color: 'blue' }),
+        renderStatCard({ icon: '⏳', title: '待处理', value: s.pending, trend: '需立即处置', color: 'yellow' }),
+        renderStatCard({ icon: '🔍', title: '待核实', value: s.verifying, color: 'cyan' }),
+        renderStatCard({ icon: '📤', title: '已上报', value: s.reporting, trend: '2项待反馈', color: 'purple' }),
+        renderStatCard({ icon: '🔴', title: '一级告警', value: s.highLevel, trend: `平均响应 ${avgResponse}`, color: 'red' }),
+        renderStatCard({ icon: '✅', title: '误报率', value: s.falseAlarmRate, trend: `误报 ${s.falseAlarm} 条`, color: 'green' })
       ].join('');
       document.getElementById('statsGrid').innerHTML = html;
     }
@@ -155,7 +173,8 @@
       const level = document.getElementById('levelFilter').value;
       const status = document.getElementById('statusFilter').value;
 
-      let filtered = alerts.filter(a => {
+      let allAlerts = AlertAPI.getAll();
+      let filtered = allAlerts.filter(a => {
         if (search && !(a.content.toLowerCase().includes(search) || a.author.toLowerCase().includes(search) || a.hitWord.toLowerCase().includes(search))) return false;
         if (platform && a.platform !== platform) return false;
         if (category && a.category !== category) return false;
@@ -176,7 +195,7 @@
 
       const html = filtered.map(a => {
         const platformInfo = PLATFORMS[a.platform];
-        const isRead = readAlertIds.has(a.id);
+        const isRead = readIds.has(a.id);
         const isSelected = selectedAlertId === a.id;
         const contentHighlighted = a.content.replace(a.hitWord, `<span class="hit-word">${a.hitWord}</span>`);
         const heatColor = getHeatColor(a.heat);
@@ -215,8 +234,9 @@
 
     function selectAlert(id) {
       selectedAlertId = id;
-      readAlertIds.add(id);
-      const a = alerts.find(x => x.id === id);
+      ReadAlerts.add(id);
+      readIds = ReadAlerts.get();
+      const a = AlertAPI.getById(id);
       if (!a) return;
       renderAlertList();
       renderDetail(a);
@@ -229,6 +249,28 @@
       const heatColor = getHeatColor(a.heat);
 
       const levelText = a.level === 'red' ? '🔴 一级（立即处置）' : a.level === 'orange' ? '🟠 二级（紧急）' : a.level === 'yellow' ? '🟡 三级（关注）' : '🔵 四级（常规）';
+
+      // 获取该告警的操作日志
+      const logs = LogAPI.getByAlertId(a.id);
+      const logsHTML = logs.length > 0 ? logs.map(log => `
+        <div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px dashed var(--border);">
+          <div style="flex-shrink:0;">
+            <span class="tag ${getLogTypeTagClass(log.type)}" style="font-size:11px;">${getLogTypeText(log.type)}</span>
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:2px;">
+              <strong style="color:var(--text-primary);">${log.operator}</strong>
+              · ${formatTime(log.createdAt)}
+            </div>
+            <div style="font-size:13px;color:var(--text-primary);">${log.remark}</div>
+            ${log.fromStatus && log.toStatus && log.fromStatus !== log.toStatus ? `
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+                ${getStatusText(log.fromStatus)} → ${getStatusText(log.toStatus)}
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `).join('') : '<div style="color:var(--text-muted);font-size:12px;">暂无处置记录</div>';
 
       const html = `
         <div class="detail-section">
@@ -291,7 +333,15 @@
           </div>
           <div style="margin-top:12px;">
             <label class="form-label">处置备注</label>
-            <textarea class="form-textarea" placeholder="记录处置过程、联系的相关部门等信息..."></textarea>
+            <textarea class="form-textarea" id="detail-remark" placeholder="记录处置过程、联系的相关部门等信息..."></textarea>
+            <button class="btn btn-sm" style="margin-top:8px;" onclick="saveRemark(${a.id})">💾 保存备注</button>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">📜 处置记录时间线</div>
+          <div style="max-height:260px;overflow-y:auto;">
+            ${logsHTML}
           </div>
         </div>
       `;
@@ -300,17 +350,34 @@
     }
 
     function updateStatus(id, status) {
-      const a = alerts.find(x => x.id === id);
-      if (!a) return;
-      a.status = status;
+      const remarkEl = document.getElementById('detail-remark');
+      const remark = remarkEl?.value?.trim() || '';
+      
+      const alert = AlertAPI.updateStatus(id, status, remark);
+      if (!alert) return;
+
       renderStats();
       renderAlertList();
-      renderDetail(a);
+      renderDetail(alert);
       showNotification('状态已更新', `告警已标记为「${getStatusText(status)}」`, 'success');
     }
 
+    function saveRemark(id) {
+      const remarkEl = document.getElementById('detail-remark');
+      const remark = remarkEl?.value?.trim();
+      if (!remark) {
+        showNotification('请输入备注内容', '', 'warning');
+        return;
+      }
+      AlertAPI.addRemark(id, remark);
+      const a = AlertAPI.getById(id);
+      if (a) renderDetail(a);
+      showNotification('备注已保存', '', 'success');
+    }
+
     function markAllRead() {
-      alerts.forEach(a => readAlertIds.add(a.id));
+      ReadAlerts.markAll();
+      readIds = ReadAlerts.get();
       renderAlertList();
       showNotification('操作成功', '所有告警已标记为已读', 'success');
     }

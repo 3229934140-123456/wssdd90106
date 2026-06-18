@@ -15,6 +15,7 @@
       </div>
       <div class="btn-group">
         <button class="btn" onclick="exportRules()">⬇ 导出规则</button>
+        <button class="btn" onclick="openBatchImportModal()">📥 批量导入</button>
         <button class="btn btn-primary" onclick="openAddModal()">＋ 新增敏感词</button>
       </div>
     </div>
@@ -82,29 +83,23 @@
     document.getElementById('searchInput').addEventListener('input', renderRulesTable);
 
     function renderStats() {
-      const total = sensitiveWords.length;
-      const enabled = sensitiveWords.filter(w => w.enabled).length;
-      const disabled = total - enabled;
-      const totalHits = sensitiveWords.reduce((s, w) => s + w.hitCount, 0);
-      const level1 = sensitiveWords.filter(w => w.level === '一级').length;
-      const level2 = sensitiveWords.filter(w => w.level === '二级').length;
-
+      const s = WordAPI.getStats();
       const html = [
-        renderStatCard({ icon: '📝', title: '规则总数', value: total, trend: '较昨日 +3', color: 'blue' }),
-        renderStatCard({ icon: '✅', title: '已启用', value: enabled, trend: `启用率 ${(enabled/total*100).toFixed(0)}%`, color: 'green' }),
-        renderStatCard({ icon: '⏸️', title: '已停用', value: disabled, color: 'purple' }),
-        renderStatCard({ icon: '🎯', title: '总命中次数', value: totalHits.toLocaleString(), trend: '今日 +186', color: 'cyan' }),
-        renderStatCard({ icon: '🔴', title: '一级规则', value: level1, color: 'red' }),
-        renderStatCard({ icon: '🟠', title: '二级规则', value: level2, color: 'orange' })
+        renderStatCard({ icon: '📝', title: '规则总数', value: s.total, trend: '较昨日 +3', color: 'blue' }),
+        renderStatCard({ icon: '✅', title: '已启用', value: s.enabled, trend: `启用率 ${s.total ? ((s.enabled/s.total)*100).toFixed(0) : 0}%`, color: 'green' }),
+        renderStatCard({ icon: '⏸️', title: '已停用', value: s.disabled, color: 'purple' }),
+        renderStatCard({ icon: '🎯', title: '总命中次数', value: s.totalHits.toLocaleString(), trend: '今日 +186', color: 'cyan' }),
+        renderStatCard({ icon: '🔴', title: '一级规则', value: s.level1, color: 'red' }),
+        renderStatCard({ icon: '🟠', title: '二级规则', value: s.level2, color: 'orange' })
       ].join('');
       document.getElementById('statsGrid').innerHTML = html;
     }
 
     function renderCategoryTabs() {
-      const tabs = [{ key: 'all', name: '全部', icon: '📂', count: sensitiveWords.length }];
+      const s = WordAPI.getStats();
+      const tabs = [{ key: 'all', name: '全部', icon: '📂', count: s.total }];
       Object.entries(WORD_CATEGORIES).forEach(([key, info]) => {
-        const count = sensitiveWords.filter(w => w.category === key).length;
-        tabs.push({ key, name: info.name, icon: info.icon, count });
+        tabs.push({ key, name: info.name, icon: info.icon, count: s.byCategory[key] || 0 });
       });
 
       const html = tabs.map(t => `
@@ -127,8 +122,8 @@
       const level = document.getElementById('levelFilter').value;
       const status = document.getElementById('statusFilter').value;
 
-      let filtered = sensitiveWords.filter(w => {
-        if (currentCategory !== 'all' && w.category !== currentCategory) return false;
+      let words = WordAPI.getByCategory(currentCategory);
+      let filtered = words.filter(w => {
         if (search && !(w.word.toLowerCase().includes(search) || w.remark.toLowerCase().includes(search) || w.creator.toLowerCase().includes(search))) return false;
         if (matchType && w.matchType !== matchType) return false;
         if (level && w.level !== level) return false;
@@ -182,9 +177,8 @@
     }
 
     function toggleEnabled(id) {
-      const word = sensitiveWords.find(w => w.id === id);
+      const word = WordAPI.toggleEnabled(id);
       if (word) {
-        word.enabled = !word.enabled;
         renderStats();
         renderCategoryTabs();
         showNotification('操作成功', `敏感词"${word.word}"已${word.enabled ? '启用' : '停用'}`, 'success');
@@ -198,7 +192,7 @@
 
     function openEditModal(id) {
       editingRuleId = id;
-      showRuleForm(sensitiveWords.find(w => w.id === id));
+      showRuleForm(WordAPI.getById(id));
     }
 
     function showRuleForm(word) {
@@ -207,13 +201,16 @@
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">敏感词 *</label>
-            <input type="text" class="form-input" id="f-word" value="${word?.word || ''}" placeholder="请输入敏感词">
+            <input type="text" class="form-input" id="f-word" value="${word?.word || ''}" placeholder="请输入敏感词" oninput="checkDuplicateWord()">
+            <div id="dup-tip" style="font-size:12px;color:var(--text-muted);margin-top:6px;">
+              输入后自动检测是否重复
+            </div>
           </div>
           <div class="form-group">
             <label class="form-label">所属类别 *</label>
             <select class="form-select" id="f-category">
               ${Object.entries(WORD_CATEGORIES).map(([k, i]) => `
-                <option value="${k}" ${word?.category === k ? 'selected' : ''}>${i.icon} ${i.name}</option>
+                <option value="${k}" ${word?.category === k ? 'selected' : ''}>${i.icon} ${i.name}（${i.level}）</option>
               `).join('')}
             </select>
           </div>
@@ -246,28 +243,26 @@
         const w = overlay.querySelector('#f-word').value.trim();
         if (!w) { showNotification('验证失败', '请输入敏感词', 'warning'); return false; }
 
+        // 检查重复
+        if (!isEdit && WordAPI.exists(w)) {
+          showNotification('重复提醒', `"${w}" 已在规则库中`, 'warning');
+          return false;
+        }
+        if (isEdit && WordAPI.exists(w, word.id)) {
+          showNotification('重复提醒', `"${w}" 已在规则库中`, 'warning');
+          return false;
+        }
+
         const cat = overlay.querySelector('#f-category').value;
         const matchType = overlay.querySelector('#f-matchType').value;
         const level = overlay.querySelector('#f-level').value;
         const remark = overlay.querySelector('#f-remark').value.trim();
 
         if (isEdit) {
-          Object.assign(word, { word: w, category: cat, matchType, level, remark });
+          WordAPI.update(word.id, { word: w, category: cat, matchType, level, remark });
           showNotification('修改成功', `敏感词"${w}"已更新`, 'success');
         } else {
-          const newWord = {
-            id: Date.now(),
-            word: w,
-            category: cat,
-            matchType,
-            level,
-            remark,
-            enabled: true,
-            hitCount: 0,
-            creator: getCurrentShift().operator,
-            createdAt: new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/\//g, '-')
-          };
-          sensitiveWords.unshift(newWord);
+          WordAPI.add({ word: w, category: cat, matchType, level, remark, enabled: true });
           showNotification('新增成功', `敏感词"${w}"已加入规则库`, 'success');
         }
         renderStats();
@@ -276,11 +271,40 @@
       });
     }
 
+    function checkDuplicateWord() {
+      const input = document.querySelector('#f-word');
+      const tip = document.querySelector('#dup-tip');
+      if (!input || !tip) return;
+      const val = input.value.trim();
+      if (!val) {
+        tip.innerHTML = '输入后自动检测是否重复';
+        tip.style.color = 'var(--text-muted)';
+        return;
+      }
+      const excludeId = editingRuleId || null;
+      if (WordAPI.exists(val, excludeId)) {
+        tip.innerHTML = `⚠️ <strong style="color:var(--accent-red);">"${val}" 已在规则库中</strong>`;
+        tip.style.color = 'var(--accent-red)';
+        return;
+      }
+      const fuzzyMatches = WordAPI.fuzzyExists(val, excludeId);
+      if (fuzzyMatches.length > 0) {
+        tip.innerHTML = `💡 发现 ${fuzzyMatches.length} 个相似词：${fuzzyMatches.slice(0,3).map(w => w.word).join('、')}${fuzzyMatches.length > 3 ? '...' : ''}`;
+        tip.style.color = 'var(--accent-yellow)';
+        return;
+      }
+      tip.innerHTML = '✅ 无重复，可正常添加';
+      tip.style.color = 'var(--accent-green)';
+    }
+
     function duplicateRule(id) {
-      const word = sensitiveWords.find(w => w.id === id);
+      const word = WordAPI.getById(id);
       if (word) {
-        const newWord = { ...word, id: Date.now(), word: word.word + ' (副本)', hitCount: 0, creator: getCurrentShift().operator, createdAt: new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/\//g, '-') };
-        sensitiveWords.unshift(newWord);
+        const newWord = WordAPI.add({
+          ...word,
+          word: word.word + ' (副本)',
+          hitCount: 0
+        });
         renderStats();
         renderCategoryTabs();
         renderRulesTable();
@@ -289,13 +313,13 @@
     }
 
     function deleteRule(id) {
-      const word = sensitiveWords.find(w => w.id === id);
+      const word = WordAPI.getById(id);
       if (!word) return;
       showModal('确认删除', `
         <p style="padding:12px 0;">确定要删除敏感词<strong style="color:var(--accent-red);">「${word.word}」</strong>吗？</p>
         <p style="font-size:12px;color:var(--text-muted);">删除后该规则将不再生效，此操作不可撤销。</p>
       `, () => {
-        sensitiveWords = sensitiveWords.filter(w => w.id !== id);
+        WordAPI.remove(id);
         renderStats();
         renderCategoryTabs();
         renderRulesTable();
@@ -304,7 +328,177 @@
     }
 
     function exportRules() {
-      showNotification('导出成功', `已导出 ${sensitiveWords.length} 条规则`, 'success');
+      const words = WordAPI.getAll();
+      const data = words.map(w => `${w.word},${WORD_CATEGORIES[w.category].name},${w.matchType === 'exact' ? '精确' : '近似'},${w.level},${w.enabled ? '启用' : '停用'},${w.remark}`).join('\n');
+      const blob = new Blob([`敏感词,类别,匹配方式,等级,状态,备注\n${data}`], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `敏感词规则_${new Date().toISOString().slice(0,10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showNotification('导出成功', `已导出 ${words.length} 条规则`, 'success');
+    }
+
+    // ==========================================
+    // 批量导入
+    // ==========================================
+    function openBatchImportModal() {
+      const formHTML = `
+        <div style="margin-bottom:16px;">
+          <div class="form-label">导入方式</div>
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <button class="btn btn-primary" onclick="switchImportMode('text')" id="mode-text">📝 文本粘贴</button>
+            <button class="btn" onclick="switchImportMode('file')" id="mode-file">📁 CSV 上传</button>
+          </div>
+        </div>
+
+        <div id="import-mode-text">
+          <div class="form-group">
+            <label class="form-label">每行一个敏感词，支持格式：</label>
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;line-height:1.6;">
+              格式1（纯文本）：敏感词1<br>
+              格式2（带分类）：敏感词,类别,匹配方式,等级,备注<br>
+              例：<code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">暴力事件,涉稳,精确,二级,暴力类敏感词</code>
+            </div>
+            <textarea class="form-textarea" id="import-text" style="min-height:180px;font-family:Consolas,monospace;font-size:12px;" placeholder="暴力事件&#10;上访&#10;谣言,谣言,近似,三级,谣言类敏感词"></textarea>
+          </div>
+        </div>
+
+        <div id="import-mode-file" style="display:none;">
+          <div class="form-group">
+            <label class="form-label">上传 CSV 文件</label>
+            <input type="file" id="import-file" accept=".csv,.txt" class="form-input" style="padding:6px;">
+            <div style="font-size:12px;color:var(--text-muted);margin-top:8px;">
+              CSV 格式：敏感词,类别,匹配方式,等级,备注
+            </div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">默认类别（未指定时）</label>
+            <select class="form-select" id="import-default-category">
+              ${Object.entries(WORD_CATEGORIES).map(([k, i]) => `<option value="${k}">${i.icon} ${i.name}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">默认匹配方式</label>
+            <select class="form-select" id="import-default-match">
+              <option value="exact">🎯 精确命中</option>
+              <option value="fuzzy">🔍 近似命中</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">默认等级</label>
+            <select class="form-select" id="import-default-level">
+              <option value="一级">🔴 一级</option>
+              <option value="二级" selected>🟠 二级</option>
+              <option value="三级">🟡 三级</option>
+              <option value="四级">🔵 四级</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="import-preview" style="display:none;">
+          <div class="form-label">导入预览（最多显示10条）</div>
+          <div id="import-preview-list" style="max-height:160px;overflow-y:auto;background:var(--bg-primary);border-radius:6px;padding:8px;border:1px solid var(--border);"></div>
+        </div>
+      `;
+
+      const modal = showModal('批量导入敏感词', formHTML, (overlay) => {
+        const mode = currentImportMode;
+        const defaultCategory = overlay.querySelector('#import-default-category').value;
+        const defaultMatch = overlay.querySelector('#import-default-match').value;
+        const defaultLevel = overlay.querySelector('#import-default-level').value;
+
+        let text = '';
+        if (mode === 'text') {
+          text = overlay.querySelector('#import-text').value.trim();
+        } else {
+          const fileInput = overlay.querySelector('#import-file');
+          if (!fileInput.files || fileInput.files.length === 0) {
+            showNotification('请选择文件', '', 'warning');
+            return false;
+          }
+          // 文件方式通过 reader 异步，这里简化处理文本
+          showNotification('CSV 上传功能', '请使用文本粘贴方式体验', 'info');
+          return false;
+        }
+
+        if (!text) {
+          showNotification('请输入内容', '', 'warning');
+          return false;
+        }
+
+        const lines = text.split('\n').filter(l => l.trim());
+        const items = lines.map(line => {
+          const parts = line.split(',').map(p => p.trim());
+          const word = parts[0];
+          let category = defaultCategory;
+          let matchType = defaultMatch;
+          let level = defaultLevel;
+          let remark = '';
+
+          if (parts.length >= 2) {
+            const catKey = Object.keys(WORD_CATEGORIES).find(k => WORD_CATEGORIES[k].name === parts[1]);
+            if (catKey) category = catKey;
+          }
+          if (parts.length >= 3) {
+            if (parts[2].includes('近似') || parts[2] === 'fuzzy') matchType = 'fuzzy';
+            if (parts[2].includes('精确') || parts[2] === 'exact') matchType = 'exact';
+          }
+          if (parts.length >= 4) {
+            if (parts[3].includes('一')) level = '一级';
+            else if (parts[3].includes('二')) level = '二级';
+            else if (parts[3].includes('三')) level = '三级';
+            else if (parts[3].includes('四')) level = '四级';
+          }
+          if (parts.length >= 5) remark = parts[4];
+
+          return { word, category, matchType, level, remark };
+        });
+
+        const result = WordAPI.batchImport(items);
+        renderStats();
+        renderCategoryTabs();
+        renderRulesTable();
+
+        let msg = `成功导入 ${result.success} 条`;
+        if (result.skipped > 0) msg += `，跳过 ${result.skipped} 条（重复）`;
+        showNotification('导入完成', msg, result.success > 0 ? 'success' : 'warning');
+      });
+
+      // 绑定模式切换
+      modal.querySelector('#mode-text').onclick = () => switchImportMode('text', modal);
+      modal.querySelector('#mode-file').onclick = () => switchImportMode('file', modal);
+      modal.querySelector('#import-text')?.addEventListener('input', () => updateImportPreview(modal));
+    }
+
+    let currentImportMode = 'text';
+    function switchImportMode(mode, modal) {
+      currentImportMode = mode;
+      const m = modal || document;
+      const textBtn = m.querySelector('#mode-text');
+      const fileBtn = m.querySelector('#mode-file');
+      const textPanel = m.querySelector('#import-mode-text');
+      const filePanel = m.querySelector('#import-mode-file');
+
+      if (mode === 'text') {
+        textBtn.className = 'btn btn-primary';
+        fileBtn.className = 'btn';
+        textPanel.style.display = 'block';
+        filePanel.style.display = 'none';
+      } else {
+        textBtn.className = 'btn';
+        fileBtn.className = 'btn btn-primary';
+        textPanel.style.display = 'none';
+        filePanel.style.display = 'block';
+      }
+    }
+
+    function updateImportPreview(modal) {
+      // 简化版本，可后续扩展
     }
   </script>
 </body>

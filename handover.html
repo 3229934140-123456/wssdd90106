@@ -11,9 +11,10 @@
     <div class="page-header">
       <div class="page-title-block">
         <h1>🔄 交接班摘要</h1>
-        <p>汇总本班次高频词、未处理告警和重点账号，帮助下一班快速接手工作</p>
+        <p>汇总本班次高频词、未处理告警、重点账号和处置记录，帮助下一班快速接手工作</p>
       </div>
       <div class="btn-group">
+        <button class="btn" onclick="refreshData()">🔄 刷新数据</button>
         <button class="btn" onclick="window.print()">🖨 打印交班表</button>
         <button class="btn btn-primary" onclick="confirmHandover()">✅ 确认交接班</button>
       </div>
@@ -49,7 +50,7 @@
     <div class="stats-grid" id="statsGrid"></div>
 
     <div class="summary-grid">
-      <div class="panel" style="grid-column: span 1;">
+      <div class="panel">
         <div class="panel-header">
           <div class="panel-title">🔥 本班次高频敏感词 TOP 10</div>
           <span class="tag tag-yellow">按命中次数排序</span>
@@ -59,7 +60,7 @@
         </div>
       </div>
 
-      <div class="panel" style="grid-column: span 1;">
+      <div class="panel">
         <div class="panel-header">
           <div class="panel-title">📊 告警分类分布</div>
           <span class="tag tag-blue">按类别统计</span>
@@ -69,7 +70,7 @@
         </div>
       </div>
 
-      <div class="panel" style="grid-column: span 1;">
+      <div class="panel">
         <div class="panel-header">
           <div class="panel-title">🌐 平台来源分布</div>
           <span class="tag tag-cyan">TOP 6 平台</span>
@@ -126,10 +127,10 @@
     <div class="summary-grid" style="grid-template-columns: 1fr 1fr; margin-bottom:0;">
       <div class="panel">
         <div class="panel-header">
-          <div class="panel-title">📝 本班次重要处置记录</div>
-          <button class="btn btn-sm btn-primary" onclick="addRecord()">＋ 添加记录</button>
+          <div class="panel-title">� 本班次处置记录时间线</div>
+          <span class="tag tag-blue" id="recordsCount">0 条记录</span>
         </div>
-        <div class="panel-body">
+        <div class="panel-body" style="max-height:420px;overflow-y:auto;">
           <div id="handoverRecords"></div>
         </div>
       </div>
@@ -141,16 +142,12 @@
         <div class="panel-body">
           <div class="form-group">
             <label class="form-label">需特别关注事项</label>
-            <textarea class="form-textarea" id="nextShiftNotes" placeholder="请填写下一班需要重点关注的事项、正在跟进中的事件等...">1. 继续关注"开发区电子厂罢工"事件的后续发展，该事件真实性正在核实中
-2. 抖音账号"街头拍客"发布的非法集会视频热度较高，需持续监测传播情况
-3. 暴雨导致的洪灾救援相关舆情需保持关注，及时回应群众求助信息
-4. 领导批示的"领导作风"文章已上报，需跟踪上级部门反馈
-5. 夜间重点关注天涯论坛、贴吧等论坛类平台的突发舆情</textarea>
+            <textarea class="form-textarea" id="nextShiftNotes" style="min-height:160px;" placeholder="请填写下一班需要重点关注的事项、正在跟进中的事件等..."></textarea>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
             <div class="form-group">
-              <label class="form-label">预计交接</label>
-              <input type="text" class="form-input" value="下一班：夜班 00:00-08:00" readonly>
+              <label class="form-label">上次修改</label>
+              <input type="text" class="form-input" id="lastUpdated" readonly style="color:var(--text-muted);">
             </div>
             <div class="form-group">
               <label class="form-label">交接人签字</label>
@@ -168,13 +165,29 @@
   <script>
     renderTopNav('handover');
     renderShiftInfo();
-    renderStats();
-    renderTopWords();
-    renderCategoryProgress();
-    renderPlatformProgress();
-    renderPendingAlerts();
-    renderKeyAccounts();
-    renderHandoverRecords();
+    renderAll();
+
+    // 每分钟刷新一下时间显示
+    setInterval(() => {
+      renderShiftInfo();
+      renderStats();
+    }, 60000);
+
+    function refreshData() {
+      renderAll();
+      showNotification('数据已刷新', '所有统计信息已更新为最新状态', 'success');
+    }
+
+    function renderAll() {
+      renderStats();
+      renderTopWords();
+      renderCategoryProgress();
+      renderPlatformProgress();
+      renderPendingAlerts();
+      renderKeyAccounts();
+      renderHandoverRecords();
+      renderNotes();
+    }
 
     function renderShiftInfo() {
       const shift = getCurrentShift();
@@ -182,30 +195,29 @@
       document.getElementById('shiftTime').textContent = `${shift.startTime} - ${shift.endTime}`;
       document.getElementById('shiftOperator').textContent = shift.operator;
       document.getElementById('shiftAssistant').textContent = shift.assistant;
-      const now = new Date();
-      document.getElementById('handoverTime').textContent = 
-        `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+      document.getElementById('handoverTime').textContent = formatNowDateTime();
     }
 
     function renderStats() {
-      const stats = getAlertStats();
-      const processed = stats.verifying + stats.reporting + stats.done;
-      const rate = stats.total > 0 ? ((processed / stats.total) * 100).toFixed(0) + '%' : '0%';
-      const urgentPend = alerts.filter(a => (a.status === 'pending' || a.status === 'reporting') && a.level === 'red').length;
+      const s = AlertAPI.getStats();
+      const processed = s.verifying + s.reporting + s.done;
+      const rate = s.total > 0 ? ((processed / s.total) * 100).toFixed(0) + '%' : '0%';
+      const urgentPend = AlertAPI.getAll().filter(a => (a.status === 'pending' || a.status === 'reporting') && a.level === 'red').length;
+      const wordsTotal = WordAPI.getStats().total;
 
       const html = [
-        renderStatCard({ icon: '📊', title: '本班次告警', value: stats.total, trend: `处置率 ${rate}`, color: 'blue' }),
-        renderStatCard({ icon: '✅', title: '已处置', value: processed, trend: `办结 ${stats.done} 件`, color: 'green' }),
-        renderStatCard({ icon: '⚠️', title: '待跟进', value: stats.pending + stats.verifying + stats.reporting, trend: `误报 ${stats.falseAlarm} 条`, color: 'yellow' }),
+        renderStatCard({ icon: '📊', title: '本班次告警', value: s.total, trend: `处置率 ${rate}`, color: 'blue' }),
+        renderStatCard({ icon: '✅', title: '已处置', value: processed, trend: `办结 ${s.done} 件`, color: 'green' }),
+        renderStatCard({ icon: '⚠️', title: '待跟进', value: s.pending + s.verifying + s.reporting, trend: `误报 ${s.falseAlarm} 条`, color: 'yellow' }),
         renderStatCard({ icon: '🔴', title: '紧急未处理', value: urgentPend, trend: urgentPend > 0 ? '请优先处置' : '全部已响应', color: 'red' }),
-        renderStatCard({ icon: '📤', title: '上报事项', value: stats.reporting, trend: `${stats.reporting} 件待反馈`, color: 'purple' }),
-        renderStatCard({ icon: '👁️', title: '监测平台', value: Object.keys(PLATFORMS).length, trend: '全网持续扫描', color: 'cyan' })
+        renderStatCard({ icon: '📤', title: '上报事项', value: s.reporting, trend: `${s.reporting} 件待反馈`, color: 'purple' }),
+        renderStatCard({ icon: '�', title: '生效规则', value: wordsTotal, trend: '持续更新中', color: 'cyan' })
       ].join('');
       document.getElementById('statsGrid').innerHTML = html;
     }
 
     function renderTopWords() {
-      const words = getTopWords().slice(0, 10);
+      const words = AlertAPI.getTopWords(10);
       const maxCount = words[0]?.count || 1;
 
       const colorMap = {
@@ -239,7 +251,7 @@
     }
 
     function renderCategoryProgress() {
-      const catStats = getCategoryStats();
+      const catStats = AlertAPI.getCategoryStats();
       const max = Math.max(...catStats.map(c => c.count), 1);
       const colorMap = {
         red: 'var(--accent-red)',
@@ -255,7 +267,7 @@
         return `
           <div class="progress-item">
             <div class="progress-label">
-              <span class="name">${WORD_CATEGORIES[c.category].icon} ${c.name}</span>
+              <span class="name">${c.icon} ${c.name}</span>
               <span class="num">${c.count} 条</span>
             </div>
             <div class="progress-bar">
@@ -268,21 +280,21 @@
     }
 
     function renderPlatformProgress() {
-      const pStats = getPlatformStats().slice(0, 6);
+      const pStats = AlertAPI.getPlatformStats().slice(0, 6);
       const max = Math.max(...pStats.map(p => p.count), 1);
 
+      const colorMap = {
+        red: 'var(--accent-red)',
+        green: 'var(--accent-green)',
+        blue: 'var(--accent-blue)',
+        cyan: 'var(--accent-cyan)',
+        orange: 'var(--accent-orange)',
+        pink: 'var(--accent-purple)',
+        gray: 'var(--text-muted)'
+      };
       const html = pStats.map(p => {
         const pct = (p.count / max * 100).toFixed(0);
         const info = PLATFORMS[p.platform];
-        const colorMap = {
-          red: 'var(--accent-red)',
-          green: 'var(--accent-green)',
-          blue: 'var(--accent-blue)',
-          cyan: 'var(--accent-cyan)',
-          orange: 'var(--accent-orange)',
-          pink: 'var(--accent-purple)',
-          gray: 'var(--text-muted)'
-        };
         return `
           <div class="progress-item">
             <div class="progress-label">
@@ -300,15 +312,10 @@
 
     function renderPendingAlerts() {
       const filter = document.getElementById('pendingFilter').value;
-      let pending = alerts.filter(a => a.status !== 'done' && a.status !== 'false_alarm');
+      let pending = AlertAPI.getUnprocessed();
       if (filter !== 'all') {
         pending = pending.filter(a => a.status === filter);
       }
-      pending.sort((a, b) => {
-        const levelOrder = { red: 0, orange: 1, yellow: 2, blue: 3 };
-        if (levelOrder[a.level] !== levelOrder[b.level]) return levelOrder[a.level] - levelOrder[b.level];
-        return new Date(b.createdAt) - new Date(a.createdAt);
-      });
 
       if (pending.length === 0) {
         document.getElementById('pendingAlertsBody').innerHTML = `
@@ -373,104 +380,114 @@
       document.getElementById('keyAccountsList').innerHTML = html;
     }
 
-    let records = [
-      { time: '10:32', operator: '张伟', content: '接到"抖音非法集会视频"告警，已联系属地派出所核实，正在等待回复。', level: 'red' },
-      { time: '11:15', operator: '李娜', content: '处置"领导作风"公众号文章，研判后上报市委宣传部舆情处。', level: 'orange' },
-      { time: '13:48', operator: '张伟', content: '新华网评论区"打砸抢烧"不实信息，已联系平台删除并辟谣，标记为误报。', level: 'yellow' },
-      { time: '14:20', operator: '李娜', content: '快手洪灾求助视频，已转应急管理局，对方表示救援力量已到位。', level: 'orange' }
-    ];
-
+    // ==========================================
+    // 处置记录时间线
+    // ==========================================
     function renderHandoverRecords() {
-      if (records.length === 0) {
+      const logs = LogAPI.getTimeline();
+      document.getElementById('recordsCount').textContent = `${logs.length} 条记录`;
+
+      if (logs.length === 0) {
         document.getElementById('handoverRecords').innerHTML = `
           <div class="empty-state">
             <div class="empty-state-icon">📝</div>
-            <div class="empty-state-text">暂无处置记录，点击上方按钮添加</div>
+            <div class="empty-state-text">暂无处置记录</div>
           </div>
         `;
         return;
       }
 
-      const levelStyle = {
-        red: 'border-left:3px solid var(--accent-red);',
-        orange: 'border-left:3px solid var(--accent-orange);',
-        yellow: 'border-left:3px solid var(--accent-yellow);',
-        blue: 'border-left:3px solid var(--accent-blue);'
-      };
+      const html = logs.map(log => {
+        const alert = AlertAPI.getById(log.alertId);
+        const alertSummary = alert ? (alert.content.length > 25 ? alert.content.slice(0, 25) + '...' : alert.content) : '（告警已删除）';
+        const levelColor = alert?.level === 'red' ? 'var(--accent-red)' :
+                           alert?.level === 'orange' ? 'var(--accent-orange)' :
+                           alert?.level === 'yellow' ? 'var(--accent-yellow)' : 'var(--accent-blue)';
 
-      const html = records.map(r => `
-        <div style="padding:12px 16px;background:var(--bg-tertiary);border-radius:6px;margin-bottom:10px;${levelStyle[r.level]}">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <div style="font-size:13px;font-weight:600;">
-              <span style="color:var(--accent-cyan);font-family:Consolas;">[${r.time}]</span>
-              ${r.operator}
+        return `
+          <div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px dashed var(--border);position:relative;">
+            <div style="flex-shrink:0;display:flex;flex-direction:column;align-items:center;">
+              <div style="width:10px;height:10px;border-radius:50%;background:${levelColor};margin-top:6px;"></div>
             </div>
-            <span class="tag tag-${r.level === 'red' ? 'red' : r.level === 'orange' ? 'orange' : 'yellow'}">
-              ${r.level === 'red' ? '重要' : r.level === 'orange' ? '关注' : '常规'}
-            </span>
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;">
+                  <span class="tag ${getLogTypeTagClass(log.type)}" style="font-size:11px;">${getLogTypeText(log.type)}</span>
+                  ${log.fromStatus && log.toStatus && log.fromStatus !== log.toStatus ? `
+                    <span style="font-size:12px;color:var(--text-muted);">
+                      ${getStatusText(log.fromStatus)} → ${getStatusText(log.toStatus)}
+                    </span>
+                  ` : ''}
+                </div>
+                <div style="font-size:11px;color:var(--text-muted);font-family:Consolas;">
+                  ${formatTime(log.createdAt)}
+                </div>
+              </div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-bottom:4px;">
+                <strong style="color:var(--text-primary);">${log.operator}</strong>
+                · 告警 #${String(log.alertId).slice(-6)}
+              </div>
+              <div style="font-size:13px;color:var(--text-primary);margin-bottom:4px;">${log.remark}</div>
+              <div style="font-size:11px;color:var(--text-muted);cursor:pointer;" onclick="goToAlert(${log.alertId})" title="查看详情">
+                🔗 ${alertSummary}
+              </div>
+            </div>
           </div>
-          <div style="font-size:13px;color:var(--text-secondary);line-height:1.6;">${r.content}</div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
+
       document.getElementById('handoverRecords').innerHTML = html;
     }
 
-    function addRecord() {
-      const formHTML = `
-        <div class="form-group">
-          <label class="form-label">重要程度</label>
-          <select class="form-select" id="r-level">
-            <option value="red">🔴 重要</option>
-            <option value="orange">🟠 关注</option>
-            <option value="yellow">🟡 常规</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">记录内容 *</label>
-          <textarea class="form-textarea" id="r-content" placeholder="描述处置过程、联系的部门、事件进展等..."></textarea>
-        </div>
-      `;
-      showModal('添加处置记录', formHTML, (overlay) => {
-        const content = overlay.querySelector('#r-content').value.trim();
-        if (!content) { showNotification('请填写记录内容', '', 'warning'); return false; }
-        const level = overlay.querySelector('#r-level').value;
-        const now = new Date();
-        records.unshift({
-          time: `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
-          operator: getCurrentShift().operator,
-          content,
-          level
-        });
-        renderHandoverRecords();
-        showNotification('记录已添加', '', 'success');
-      });
+    function renderNotes() {
+      const notes = HandoverNotes.get();
+      document.getElementById('nextShiftNotes').value = notes.content;
+      document.getElementById('signInput').value = notes.operator || '';
+      document.getElementById('lastUpdated').value = notes.updatedAt || '未保存';
+    }
+
+    function saveNotes() {
+      const content = document.getElementById('nextShiftNotes').value;
+      const sign = document.getElementById('signInput').value.trim();
+      if (!sign) { showNotification('请签字确认', '输入交接人姓名后保存', 'warning'); return; }
+      HandoverNotes.save(content, sign);
+      document.getElementById('lastUpdated').value = formatNowDateTime();
+      showNotification('保存成功', `交班记录已存档（签字：${sign}）`, 'success');
     }
 
     function goToAlert(id) {
       window.location.href = `alerts.html?highlight=${id}`;
     }
 
-    function saveNotes() {
-      const notes = document.getElementById('nextShiftNotes').value;
-      const sign = document.getElementById('signInput').value;
-      if (!sign) { showNotification('请签字确认', '输入交接人姓名后保存', 'warning'); return; }
-      showNotification('保存成功', `交班记录已存档（签字：${sign}）`, 'success');
-    }
-
     function confirmHandover() {
-      const sign = document.getElementById('signInput').value;
+      const sign = document.getElementById('signInput').value.trim();
+      const s = AlertAPI.getStats();
+      const pending = s.pending + s.verifying + s.reporting;
+
       showModal('确认交接班', `
         <div style="padding:12px 0;">
           <p style="margin-bottom:16px;">确认将工作交接给下一班次人员吗？</p>
           <div style="background:var(--bg-tertiary);padding:14px;border-radius:8px;">
             <div style="margin-bottom:8px;"><strong>交班人：</strong>${getCurrentShift().operator}${sign ? `（${sign}）` : ''}</div>
-            <div style="margin-bottom:8px;"><strong>待跟进告警：</strong><span style="color:var(--accent-orange);font-weight:600;">${alerts.filter(a => a.status !== 'done' && a.status !== 'false_alarm').length} 条</span></div>
-            <div style="margin-bottom:8px;"><strong>重要处置记录：</strong>${records.length} 条</div>
-            <div><strong>工作要点：</strong>已填写</div>
+            <div style="margin-bottom:8px;"><strong>待跟进告警：</strong><span style="color:var(--accent-orange);font-weight:600;">${pending} 条</span></div>
+            <div style="margin-bottom:8px;"><strong>本班处置记录：</strong>${LogAPI.getAll().length} 条</div>
+            <div><strong>工作要点：</strong>已填写 ${document.getElementById('nextShiftNotes').value.length} 字</div>
           </div>
         </div>
       `, () => {
+        if (!sign) {
+          showNotification('请先签字', '在"交接人签字"处填写姓名', 'warning');
+          return false;
+        }
+        // 记录交班日志
+        LogAPI.add({
+          alertId: 0,
+          type: 'status',
+          operator: sign,
+          remark: `【交接班】${getCurrentShift().name} 交班给下一班，待跟进 ${pending} 条告警`
+        });
         showNotification('✅ 交接班完成', '工作已顺利交接给下一班', 'success');
+        renderHandoverRecords();
       });
     }
   </script>

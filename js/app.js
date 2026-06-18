@@ -1,6 +1,6 @@
 // 顶部导航渲染
 function renderTopNav(activePage) {
-  const stats = getAlertStats();
+  const stats = AlertAPI.getStats();
   const pendingCount = stats.pending + stats.verifying;
   const shift = getCurrentShift();
   
@@ -149,14 +149,12 @@ function startSimulatedAlerts(onNewAlert) {
     const platforms = Object.keys(PLATFORMS);
     const platform = sample.platform || platforms[Math.floor(Math.random() * platforms.length)];
     
-    const newAlert = {
-      id: Date.now(),
+    const newAlert = AlertAPI.add({
       platform,
       category: sample.category,
       hitWord: sample.hitWord,
       matchType: Math.random() > 0.5 ? '精确命中' : '近似命中',
       author,
-      authorAvatar: author.charAt(0),
       authorFans: Math.floor(Math.random() * 100000),
       content: `最新消息：${sample.word}相关内容正在网络上传播，请相关部门关注。用户发布内容中包含敏感词汇"${sample.word}"，请值班员及时研判处置。`,
       context: `该内容发布后短时间内获得多人转发，正在监测传播路径。`,
@@ -165,14 +163,13 @@ function startSimulatedAlerts(onNewAlert) {
       comment: Math.floor(Math.random() * 1000),
       like: Math.floor(Math.random() * 5000),
       deadline: Math.floor(15 + Math.random() * 120),
-      createdAt: new Date().toISOString(),
-      status: 'pending',
-      level: sample.level,
-      url: '#'
-    };
-    
-    alerts.unshift(newAlert);
-    if (alerts.length > 100) alerts.pop();
+      level: sample.level
+    });
+
+    if (AlertAPI.getAll().length > 100) {
+      const oldest = AlertAPI.getAll().slice(-1)[0];
+      if (oldest) AlertAPI.remove(oldest.id);
+    }
     
     if (onNewAlert) onNewAlert(newAlert);
   }, 15000);
